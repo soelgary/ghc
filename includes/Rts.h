@@ -205,6 +205,8 @@ INLINE_HEADER Time fsecondsToTime (double t)
 #include "rts/Messages.h"
 #include "rts/Threads.h"
 
+#include "rts/Hash.h"
+
 /* Storage format definitions */
 #include "rts/storage/FunTypes.h"
 #include "rts/storage/InfoTables.h"
@@ -217,6 +219,7 @@ INLINE_HEADER Time fsecondsToTime (double t)
 #include "rts/storage/ClosureMacros.h"
 #include "rts/storage/MBlock.h"
 #include "rts/storage/GC.h"
+#include "rts/ResourceLimits.h"
 
 /* Other RTS external APIs */
 #include "rts/Parallel.h"

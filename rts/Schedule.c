@@ -154,16 +154,13 @@ static void deleteThread_(Capability *cap, StgTSO *tso);
 
 /* ---------------------------------------------------------------------------
    Main scheduling loop.
-
    We use round-robin scheduling, each thread returning to the
    scheduler loop when one of these conditions is detected:
-
       * out of heap space
       * timer expires (thread yields)
       * thread blocks
       * thread ends
       * stack overflow
-
    ------------------------------------------------------------------------ */
 
 static Capability *
@@ -192,6 +189,8 @@ schedule (Capability *initialCapability, Task *task)
   // Scheduler loop starts here:
 
   while (1) {
+
+    // TODO: Set the current alloc and nursery once the thread is found
 
     // Check whether we have re-entered the RTS from Haskell without
     // going via suspendThread()/resumeThread (i.e. a 'safe' foreign
@@ -1167,10 +1166,11 @@ scheduleHandleHeapOverflow( Capability *cap, StgTSO *t )
 
     // Otherwise, we just ran out of space in the current nursery.
     // Grab another nursery if we can.
-    if (getNewNursery(cap)) {
+    /*if (getNewNursery(cap)) {
         debugTrace(DEBUG_sched, "thread %ld got a new nursery", t->id);
         return rtsFalse;
-    }
+    }*/
+    barf("Cannot get a new nursery for greedy capabilities");
 
     return rtsTrue;
     /* actual GC is done at the end of the while loop in schedule() */
@@ -2661,7 +2661,6 @@ void markScheduler (evac_fn evac USED_IF_NOT_THREADS,
 
 /* -----------------------------------------------------------------------------
    performGC
-
    This is the interface to the garbage collector from Haskell land.
    We provide this so that external C code can allocate and garbage
    collect when called from Haskell via _ccall_GC.
@@ -2715,12 +2714,10 @@ interruptStgRts(void)
 
 /* -----------------------------------------------------------------------------
    Wake up the RTS
-
    This function causes at least one OS thread to wake up and run the
    scheduler loop.  It is invoked when the RTS might be deadlocked, or
    an external event has arrived that may need servicing (eg. a
    keyboard interrupt).
-
    In the single-threaded RTS we don't do anything here; we only have
    one thread anyway, and the event that caused us to want to wake up
    will have interrupted any blocking system call in progress anyway.
@@ -2738,7 +2735,6 @@ void wakeUpRts(void)
 
 /* -----------------------------------------------------------------------------
    Deleting threads
-
    This is used for interruption (^C) and forking, and corresponds to
    raising an exception but without letting the thread catch the
    exception.
@@ -2776,7 +2772,6 @@ deleteThread_(Capability *cap, StgTSO *tso)
 
 /* -----------------------------------------------------------------------------
    raiseExceptionHelper
-
    This function is called by the raise# primitve, just so that we can
    move some of the tricky bits of raising an exception from C-- into
    C.  Who knows, it might be a useful re-useable thing here too.
@@ -2879,17 +2874,13 @@ raiseExceptionHelper (StgRegTable *reg, StgTSO *tso, StgClosure *exception)
 
 /* -----------------------------------------------------------------------------
    findRetryFrameHelper
-
    This function is called by the retry# primitive.  It traverses the stack
    leaving tso->sp referring to the frame which should handle the retry.
-
    This should either be a CATCH_RETRY_FRAME (if the retry# is within an orElse#)
    or should be a ATOMICALLY_FRAME (if the retry# reaches the top level).
-
    We skip CATCH_STM_FRAMEs (aborting and rolling back the nested tx that they
    create) because retries are not considered to be exceptions, despite the
    similar implementation.
-
    We should not expect to see CATCH_FRAME or STOP_FRAME because those should
    not be created within memory transactions.
    -------------------------------------------------------------------------- */
@@ -2952,7 +2943,6 @@ findRetryFrameHelper (Capability *cap, StgTSO *tso)
    up and sent a signal: BlockedOnDeadMVar if the thread was blocked
    on an MVar, or NonTermination if the thread was blocked on a Black
    Hole.
-
    Locks: assumes we hold *all* the capabilities.
    -------------------------------------------------------------------------- */
 

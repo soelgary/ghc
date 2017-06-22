@@ -108,6 +108,8 @@ typedef struct bdescr_ {
 
     struct generation_ *gen;   // generation
 
+    struct ResourceContainer_ *rc;     // resource container for block
+
     StgWord16 gen_no;          // gen->no, cached
     StgWord16 dest_no;         // number of destination generation
     StgWord16 _pad1;
@@ -118,12 +120,13 @@ typedef struct bdescr_ {
                                // (if group head, 0 otherwise)
 
 #if SIZEOF_VOID_P == 8
-    StgWord32 _padding[3];
+    StgWord32 _padding[1];
 #else
-    StgWord32 _padding[0];
+    #error "resource limits: 32-bit not supported (yet)"
 #endif
 } bdescr;
 #endif
+
 
 #if SIZEOF_VOID_P == 8
 #define BDESCR_SIZE  0x40

@@ -160,6 +160,11 @@ typedef struct {
     StgClosure *var;
 } StgMutVar;
 
+typedef struct StgRC_ {
+    StgHeader        header;
+    struct ResourceContainer_ *rc;
+} StgRC;
+
 typedef struct _StgUpdateFrame {
     StgHeader  header;
     StgClosure *updatee;

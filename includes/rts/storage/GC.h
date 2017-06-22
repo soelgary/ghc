@@ -61,10 +61,42 @@
 
 typedef StgWord memcount;
 
-typedef struct nursery_ {
+typedef struct nursery_ nursery;
+
+typedef struct RCChildren_ {
+  struct ResourceContainer_ *child;
+  struct RCChildren_ *next;
+} RCChildren;
+
+typedef struct ResourceContainer_ {
+
+  // All the pointers
+  struct ResourceContainer_ *link;
+  struct ResourceContainer_ *parent;
+  RCChildren *children;
+
+  memcount max_blocks;
+  memcount used_blocks;
+
+  StgWord status;
+
+  HashTable *block_record;
+
+  bdescr *pinned_object_block; // FIGURE DIS SHIT OUT
+
+  // rthread goes here but do this when working on the GC
+
+  nursery *nursery;
+
+  bdescr *currentAlloc;
+
+} ResourceContainer;
+
+struct nursery_ {
     bdescr *       blocks;
     memcount       n_blocks;
-} nursery;
+    ResourceContainer *rc;
+};
 
 // Nursery invariants:
 //
@@ -148,28 +180,23 @@ extern generation * oldest_gen;
 
 /* -----------------------------------------------------------------------------
    Generic allocation
-
    StgPtr allocate(Capability *cap, W_ n)
                                 Allocates memory from the nursery in
                                 the current Capability.
-
    StgPtr allocatePinned(Capability *cap, W_ n)
                                 Allocates a chunk of contiguous store
                                 n words long, which is at a fixed
                                 address (won't be moved by GC).
                                 Returns a pointer to the first word.
                                 Always succeeds.
-
                                 NOTE: the GC can't in general handle
                                 pinned objects, so allocatePinned()
                                 can only be used for ByteArrays at the
                                 moment.
-
                                 Don't forget to TICK_ALLOC_XXX(...)
                                 after calling allocate or
                                 allocatePinned, for the
                                 benefit of the ticky-ticky profiler.
-
    -------------------------------------------------------------------------- */
 
 StgPtr  allocate        ( Capability *cap, W_ n );

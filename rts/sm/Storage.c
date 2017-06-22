@@ -66,9 +66,6 @@ volatile StgWord next_nursery = 0;
 Mutex sm_mutex;
 #endif
 
-static void allocNurseries (nat from, nat to);
-static void assignNurseriesToCapabilities (nat from, nat to);
-
 static void
 initGeneration (generation *gen, int g)
 {
@@ -210,59 +207,20 @@ initStorage (void)
 
 void storageAddCapabilities (nat from, nat to)
 {
-    nat n, g, i, new_n_nurseries;
+    // TODO: We dont care about this right meow. Rewrite this when we get to the
+    // GC
 
-    if (RtsFlags.GcFlags.nurseryChunkSize == 0) {
-        new_n_nurseries = to;
-    } else {
-        memcount total_alloc = to * RtsFlags.GcFlags.minAllocAreaSize;
-        new_n_nurseries =
-            stg_max(to, total_alloc / RtsFlags.GcFlags.nurseryChunkSize);
-    }
-
-    if (from > 0) {
-        nurseries = stgReallocBytes(nurseries,
-                                    new_n_nurseries * sizeof(struct nursery_),
-                                    "storageAddCapabilities");
-    } else {
-        nurseries = stgMallocBytes(new_n_nurseries * sizeof(struct nursery_),
-                                   "storageAddCapabilities");
-    }
-
-    // we've moved the nurseries, so we have to update the rNursery
-    // pointers from the Capabilities.
-    for (i = 0; i < to; i++) {
-        capabilities[i]->r.rNursery = &nurseries[i];
-    }
-
-    /* The allocation area.  Policy: keep the allocation area
-     * small to begin with, even if we have a large suggested heap
-     * size.  Reason: we're going to do a major collection first, and we
-     * don't want it to be a big one.  This vague idea is borne out by
-     * rigorous experimental evidence.
-     */
-    allocNurseries(n_nurseries, new_n_nurseries);
-    n_nurseries = new_n_nurseries;
-
-    /*
-     * Assign each of the new capabilities a nursery.  Remember to start from
-     * next_nursery, because we may have already consumed some of the earlier
-     * nurseries.
-     */
-    assignNurseriesToCapabilities(from,to);
-
+    /*nat n, g;
     // allocate a block for each mut list
     for (n = from; n < to; n++) {
         for (g = 1; g < RtsFlags.GcFlags.generations; g++) {
             capabilities[n]->mut_lists[g] = allocBlock();
         }
     }
-
 #if defined(THREADED_RTS) && defined(llvm_CC_FLAVOR) && (CC_SUPPORTS_TLS == 0)
     newThreadLocalKey(&gctKey);
 #endif
-
-    initGcThreads(from, to);
+    initGcThreads(from, to);*/
 }
 
 
@@ -290,41 +248,28 @@ freeStorage (rtsBool free_heap)
 
 /* -----------------------------------------------------------------------------
    Note [CAF management].
-
    The entry code for every CAF does the following:
-
       - calls newCaf, which builds a CAF_BLACKHOLE on the heap and atomically
         updates the CAF with IND_STATIC pointing to the CAF_BLACKHOLE
-
       - if newCaf returns zero, it re-enters the CAF (see Note [atomic
         CAF entry])
-
       - pushes an update frame pointing to the CAF_BLACKHOLE
-
    Why do we build an BLACKHOLE in the heap rather than just updating
    the thunk directly?  It's so that we only need one kind of update
    frame - otherwise we'd need a static version of the update frame
    too, and various other parts of the RTS that deal with update
    frames would also need special cases for static update frames.
-
    newCaf() does the following:
-
       - atomically locks the CAF (see [atomic CAF entry])
-
       - it builds a CAF_BLACKHOLE on the heap
-
       - it updates the CAF with an IND_STATIC pointing to the
         CAF_BLACKHOLE, atomically.
-
       - it puts the CAF on the oldest generation's mutable list.
         This is so that we treat the CAF as a root when collecting
         younger generations.
-
       - links the CAF onto the CAF list (see below)
-
    ------------------
    Note [atomic CAF entry]
-
    With THREADED_RTS, newCaf() is required to be atomic (see
    #5558). This is because if two threads happened to enter the same
    CAF simultaneously, they would create two distinct CAF_BLACKHOLEs,
@@ -334,28 +279,21 @@ freeStorage (rtsBool free_heap)
    IND_STATIC, and return zero if another thread locked the CAF first.
    In the event that we lost the race, CAF entry code will re-enter
    the CAF and block on the other thread's CAF_BLACKHOLE.
-
    ------------------
    Note [GHCi CAFs]
-
    For GHCI, we have additional requirements when dealing with CAFs:
-
       - we must *retain* all dynamically-loaded CAFs ever entered,
         just in case we need them again.
       - we must be able to *revert* CAFs that have been evaluated, to
         their pre-evaluated form.
-
       To do this, we use an additional CAF list.  When newCaf() is
       called on a dynamically-loaded CAF, we add it to the CAF list
       instead of the old-generation mutable list, and save away its
       old info pointer (in caf->saved_info) for later reversion.
-
       To revert all the CAFs, we traverse the CAF list and reset the
       info pointer to caf->saved_info, then throw away the CAF list.
       (see GC.c:revertCAFs()).
-
       -- SDM 29/1/01
-
    -------------------------------------------------------------------------- */
 
 STATIC_INLINE StgInd *
@@ -522,8 +460,8 @@ StgInd* newGCdCAF (StgRegTable *reg, StgIndStatic *caf)
    Nursery management.
    -------------------------------------------------------------------------- */
 
-static bdescr *
-allocNursery (bdescr *tail, W_ blocks)
+bdescr *
+allocNursery (bdescr *tail, W_ blocks, ResourceContainer *rc)
 {
     bdescr *bd = NULL;
     W_ i, n;
@@ -540,6 +478,7 @@ allocNursery (bdescr *tail, W_ blocks)
         // small chunks if there are any available.  We must allow
         // single blocks here to avoid fragmentation (#7257)
         bd = allocLargeChunk(1, n);
+        bd->rc = rc;
         n = bd->blocks;
         blocks -= n;
 
@@ -573,67 +512,6 @@ allocNursery (bdescr *tail, W_ blocks)
     return &bd[0];
 }
 
-STATIC_INLINE void
-assignNurseryToCapability (Capability *cap, nat n)
-{
-    ASSERT(n < n_nurseries);
-    cap->r.rNursery = &nurseries[n];
-    cap->r.rCurrentNursery = nurseries[n].blocks;
-    newNurseryBlock(nurseries[n].blocks);
-    cap->r.rCurrentAlloc   = NULL;
-}
-
-/*
- * Give each Capability a nursery from the pool. No need to do atomic increments
- * here, everything must be stopped to call this function.
- */
-static void
-assignNurseriesToCapabilities (nat from, nat to)
-{
-    nat i;
-
-    for (i = from; i < to; i++) {
-        assignNurseryToCapability(capabilities[i], next_nursery++);
-    }
-}
-
-static void
-allocNurseries (nat from, nat to)
-{ 
-    nat i;
-    memcount n_blocks;
-
-    if (RtsFlags.GcFlags.nurseryChunkSize) {
-        n_blocks = RtsFlags.GcFlags.nurseryChunkSize;
-    } else {
-        n_blocks = RtsFlags.GcFlags.minAllocAreaSize;
-    }
-
-    for (i = from; i < to; i++) {
-        nurseries[i].blocks = allocNursery(NULL, n_blocks);
-        nurseries[i].n_blocks = n_blocks;
-    }
-}
-      
-void
-resetNurseries (void)
-{
-    next_nursery = 0;
-    assignNurseriesToCapabilities(0, n_capabilities);
-
-#ifdef DEBUG
-    bdescr *bd;
-    nat n;
-    for (n = 0; n < n_nurseries; n++) {
-        for (bd = nurseries[n].blocks; bd; bd = bd->link) {
-            ASSERT(bd->gen_no == 0);
-            ASSERT(bd->gen == g0);
-            IF_DEBUG(sanity, memset(bd->start, 0xaa, BLOCK_SIZE));
-        }
-    }
-#endif
-}
-
 W_
 countNurseryBlocks (void)
 {
@@ -658,7 +536,7 @@ resizeNursery (nursery *nursery, W_ blocks)
   if (nursery_blocks < blocks) {
       debugTrace(DEBUG_gc, "increasing size of nursery to %d blocks", 
                  blocks);
-    nursery->blocks = allocNursery(nursery->blocks, blocks-nursery_blocks);
+    nursery->blocks = allocNursery(nursery->blocks, blocks-nursery_blocks, nursery->rc);
   } 
   else {
     bdescr *next_bd;
@@ -678,7 +556,7 @@ resizeNursery (nursery *nursery, W_ blocks)
     // might have gone just under, by freeing a large block, so make
     // up the difference.
     if (nursery_blocks < blocks) {
-        nursery->blocks = allocNursery(nursery->blocks, blocks-nursery_blocks);
+        nursery->blocks = allocNursery(nursery->blocks, blocks-nursery_blocks, nursery->rc);
     }
   }
   
@@ -724,11 +602,11 @@ resizeNurseries (W_ blocks)
     resizeNurseriesEach(blocks / n_nurseries);
 }
 
+/*
 rtsBool
 getNewNursery (Capability *cap)
 {
     StgWord i;
-
     for(;;) {
         i = next_nursery;
         if (i >= n_nurseries) {
@@ -740,6 +618,8 @@ getNewNursery (Capability *cap)
         }
     }
 }
+*/
+
 /* -----------------------------------------------------------------------------
    move_STACK is called to update the TSO structure after it has been
    moved from one place to another.
@@ -757,13 +637,11 @@ move_STACK (StgStack *src, StgStack *dest)
 
 /* -----------------------------------------------------------------------------
    StgPtr allocate (Capability *cap, W_ n)
-
    Allocates an area of memory n *words* large, from the nursery of
    the supplied Capability, or from the global block pool if the area
    requested is larger than LARGE_OBJECT_THRESHOLD.  Memory is not
    allocated from the current nursery block, so as not to interfere
    with Hp/HpLim.
-
    The address of the allocated memory is returned. allocate() never
    fails; if it returns, the returned value is a valid address.  If
    the nursery is already full, then another block is allocated from
@@ -896,11 +774,9 @@ allocate (Capability *cap, W_ n)
 
 /* ---------------------------------------------------------------------------
    Allocate a fixed/pinned object.
-
    We allocate small pinned objects into a single block, allocating a
    new block when the current one overflows.  The block is chained
    onto the large_object_list of generation 0.
-
    NOTE: The GC can't in general handle pinned objects.  This
    interface is only safe to use for ByteArrays, which have no
    pointers and don't require scavenging.  It works because the
@@ -912,7 +788,6 @@ allocate (Capability *cap, W_ n)
    objects at the moment (doing so would require using the
    mostly-copying techniques).  But since we're restricting ourselves
    to pinned ByteArrays, not scavenging is ok.
-
    This function is called by newPinnedByteArray# which immediately
    fills the allocated memory with a MutableByteArray#.
    ------------------------------------------------------------------------- */
@@ -1291,18 +1166,15 @@ calcNeeded (rtsBool force_major, memcount *blocks_needed)
 
 /* ----------------------------------------------------------------------------
    Executable memory
-
    Executable memory must be managed separately from non-executable
    memory.  Most OSs these days require you to jump through hoops to
    dynamically allocate executable memory, due to various security
    measures.
-
    Here we provide a small memory allocator for executable memory.
    Memory is managed with a page granularity; we allocate linearly
    in the page, and when the page is emptied (all objects on the page
    are free) we free the page again, not forgetting to make it
    non-executable.
-
    TODO: The inability to handle objects bigger than BLOCK_SIZE_W means that
          the linker cannot use allocateExec for loading object code files
          on Windows. Once allocateExec can handle larger objects, the linker

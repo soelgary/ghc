@@ -171,9 +171,7 @@ StgPtr mark_sp;            // pointer to the next unallocated mark stack entry
 
 /* -----------------------------------------------------------------------------
    GarbageCollect: the main entry point to the garbage collector.
-
    The collect_gen parameter is gotten by calling calcNeeded().
-
    Locks held: all capabilities are held throughout GarbageCollect().
    -------------------------------------------------------------------------- */
 
@@ -650,7 +648,8 @@ GarbageCollect (nat collect_gen,
 
   resize_nursery();
 
-  resetNurseries();
+  //resetNurseries();
+  barf("Why da fuck are we resetting nurseries??");
 
  // mark the garbage collected CAFs as dead
 #if defined(DEBUG)
@@ -1370,7 +1369,6 @@ collect_gct_blocks (void)
    take a global lock.  Here we collect those blocks from the
    cap->pinned_object_blocks lists and put them on the
    main g0->large_object list.
-
    Returns: the number of words allocated this way, for stats
    purposes.
    -------------------------------------------------------------------------- */
@@ -1445,7 +1443,6 @@ mark_root(void *user USED_IF_THREADS, StgClosure **root)
 /* ----------------------------------------------------------------------------
    Reset the sizes of the older generations when we do a major
    collection.
-
    CURRENT STRATEGY: make all generations except zero the same size.
    We have to stay within the maximum heap size, and leave a certain
    percentage of the maximum heap size available to allocate into.
@@ -1657,19 +1654,19 @@ resize_nursery (void)
         {
             // we might have added extra blocks to the nursery, so
             // resize back to the original size again.
-            resizeNurseriesFixed();
+            //resizeNurseriesFixed();
+            // TODO: Resize the nurseries used here!
+            barf("Resize the damn nurseries");
         }
     }
 }
 
 /* -----------------------------------------------------------------------------
    Sanity code for CAF garbage collection.
-
    With DEBUG turned on, we manage a CAF list in addition to the SRT
    mechanism.  After GC, we run down the CAF list and blackhole any
    CAFs which have been garbage collected.  This means we get an error
    whenever the program tries to enter a garbage collected CAF.
-
    Any garbage collected CAFs are taken off the CAF list at the same
    time.
    -------------------------------------------------------------------------- */

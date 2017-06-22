@@ -28,46 +28,35 @@
 static void  initMBlock(void *mblock);
 
 /* -----------------------------------------------------------------------------
-
   Implementation notes
   ~~~~~~~~~~~~~~~~~~~~
-
   Terminology:
     - bdescr = block descriptor
     - bgroup = block group (1 or more adjacent blocks)
     - mblock = mega block
     - mgroup = mega group (1 or more adjacent mblocks)
-
    Invariants on block descriptors
    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
    bd->start always points to the start of the block.
-
    bd->free is either:
       - zero for a non-group-head; bd->link points to the head
       - (-1) for the head of a free block group
       - or it points within the block (group)
-
    bd->blocks is either:
       - zero for a non-group-head; bd->link points to the head
       - number of blocks in this group otherwise
-
    bd->link either points to a block descriptor or is NULL
-
    The following fields are not used by the allocator:
      bd->flags
      bd->gen_no
      bd->gen
      bd->dest
-
   Exceptions: we don't maintain invariants for all the blocks within a
   group on the free list, because it is expensive to modify every
   bdescr in a group when coalescing.  Just the head and last bdescrs
   will be correct for a group on the free list.
-
-
   Free lists
   ~~~~~~~~~~
-
   Preliminaries:
     - most allocations are for a small number of blocks
     - sometimes the OS gives us new memory backwards in the address
@@ -75,74 +64,59 @@ static void  initMBlock(void *mblock);
       any particular layout in the address space
     - We want to avoid fragmentation
     - We want allocation and freeing to be O(1) or close.
-
   Coalescing trick: when a bgroup is freed (freeGroup()), we can check
   whether it can be coalesced with other free bgroups by checking the
   bdescrs for the blocks on either side of it.  This means that we can
   coalesce in O(1) time.  Every free bgroup must have its head and tail
   bdescrs initialised, the rest don't matter.
-
   We keep the free list in buckets, using a heap-sort strategy.
   Bucket N contains blocks with sizes 2^N - 2^(N+1)-1.  The list of
   blocks in each bucket is doubly-linked, so that if a block is
   coalesced we can easily remove it from its current free list.
-
   To allocate a new block of size S, grab a block from bucket
   log2ceiling(S) (i.e. log2() rounded up), in which all blocks are at
   least as big as S, and split it if necessary.  If there are no
   blocks in that bucket, look at bigger buckets until a block is found
   Allocation is therefore O(logN) time.
-
   To free a block:
     - coalesce it with neighbours.
     - remove coalesced neighbour(s) from free list(s)
     - add the new (coalesced) block to the front of the appropriate
       bucket, given by log2(S) where S is the size of the block.
-
   Free is O(1).
-
   Megablocks
   ~~~~~~~~~~
-
   Separately from the free list of block groups, which are smaller than
   an mblock, we maintain a free list of mblock groups.  This is the unit
   of memory the operating system gives us, and we may either split mblocks
   into blocks or allocate them directly (when very large contiguous regions
   of memory).  mblocks have a different set of invariants than blocks:
-
   bd->start points to the start of the block IF the block is in the first mblock
   bd->blocks and bd->link are only valid IF this block is the first block
     of the first mblock
   No other fields are used (in particular, free is not used, meaning that
     space that is not used by the (single) object is wasted.
-
   This has implications for the free list as well:
   We cannot play the coalescing trick with mblocks, because there is
   no requirement that the bdescrs in the second and subsequent mblock
   of an mgroup are initialised (the mgroup might be filled with a
   large array, overwriting the bdescrs for example).
-
   The separate free list for megablocks is thus sorted in *address*
   order, so that we can coalesce.  Allocation in this list is best-fit
   by traversing the whole list: we don't expect this list to be long,
   and allocation/freeing of large blocks is rare; avoiding
   fragmentation is more important than performance here.
-
   freeGroup() might end up moving a block from free_list to
   free_mblock_list, if after coalescing we end up with a full mblock.
-
   checkFreeListSanity() checks all the invariants on the free lists.
-
   --------------------------------------------------------------------------- */
 
 /* ---------------------------------------------------------------------------
    WATCH OUT FOR OVERFLOW
-
    Be very careful with integer overflow here.  If you have an
    expression like (n_blocks * BLOCK_SIZE), and n_blocks is an int or
    a nat, then it will very likely overflow on a 64-bit platform.
    Always cast to StgWord (or W_ for short) first: ((W_)n_blocks * BLOCK_SIZE).
-
   --------------------------------------------------------------------------- */
 
 #define MAX_FREE_LIST 9
@@ -330,6 +304,24 @@ alloc_mega_group (StgWord mblocks)
     }
     bd->blocks = MBLOCK_GROUP_BLOCKS(mblocks);
     return bd;
+}
+
+// NB: This function /accurately/ reports the total number of blocks
+// that are needed to service an allocation of size n (including extra
+// blocks from a megablock group).  However, it does not report the
+// blocks used for block descriptors.  (This only constitutes a 4k loss
+// of precision for every 1+ MB lump allocation, which results in less
+// than a constant factor higher effective allocation.)  Invariant is
+// that neededBlocks coincides with the blocks field of the resulting
+// allocation.
+W_
+neededBlocks(W_ n)
+{
+    if (n >= BLOCKS_PER_MBLOCK) {
+        return MBLOCK_GROUP_BLOCKS(BLOCKS_TO_MBLOCKS(n));
+    } else {
+        return n;
+    }
 }
 
 bdescr *
