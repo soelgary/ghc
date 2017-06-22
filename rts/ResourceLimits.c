@@ -98,7 +98,26 @@ newRC(ResourceContainer *parent, nat max_blocks)
 
   rc->nursery = nurse;
   rc->currentAlloc = bd;
-  
+
+  rc->pinned_object_block = NULL;
+  rc->pinned_object_blocks = NULL;
+
+  rc->large_objects = NULL;
+  rc->n_large_blocks = 0;
+  rc->n_large_words = 0;
+  rc->n_new_large_words = 0;
+
+  rc->mut_lists  = stgMallocBytes(sizeof(bdescr *) *
+                                     RtsFlags.GcFlags.generations,
+                                     "newRC");
+  rc->saved_mut_lists = stgMallocBytes(sizeof(bdescr *) *
+                                        RtsFlags.GcFlags.generations,
+                                        "newRC");
+  nat g;
+  for (g = 0; g < RtsFlags.GcFlags.generations; g++) {
+    rc->mut_lists[g] = NULL;
+  }
+
   rc->link = RC_LIST;
   rc->children = NULL;
 

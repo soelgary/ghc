@@ -805,28 +805,31 @@ statDescribeGens(void)
 
   tot_live = 0;
   tot_slop = 0;
+  gen_live = 0;
+  gen_blocks = 0;
+
+  ResourceContainer *rc;
+  for (rc = RC_LIST; rc != NULL; rc = rc->link) {
+      for(bd = rc->large_objects, lge = 0; bd; bd = bd->link) {
+          lge++;
+      }
+      bd = rc->pinned_object_block;
+      if (bd != NULL) {
+        gen_live += bd->free - bd->start;
+        gen_blocks += bd->blocks;
+      }
+  }
 
   for (g = 0; g < RtsFlags.GcFlags.generations; g++) {
       gen = &generations[g];
 
-      for (bd = gen->large_objects, lge = 0; bd; bd = bd->link) {
-          lge++;
-      }
-
-      gen_live   = genLiveWords(gen);
-      gen_blocks = genLiveBlocks(gen);
+      gen_live   += genLiveWords(gen);
+      gen_blocks += genLiveBlocks(gen);
 
       mut = 0;
+
       for (i = 0; i < n_capabilities; i++) {
           mut += countOccupied(capabilities[i]->mut_lists[g]);
-
-          // Add the pinned object block.
-          bd = capabilities[i]->pinned_object_block;
-          if (bd != NULL) {
-              gen_live   += bd->free - bd->start;
-              gen_blocks += bd->blocks;
-          }
-
           gen_live   += gcThreadLiveWords(i,g);
           gen_blocks += gcThreadLiveBlocks(i,g);
       }

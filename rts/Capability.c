@@ -274,18 +274,6 @@ initCapability( Capability *cap, nat i )
     cap->f.stgEagerBlackholeInfo = (W_)&__stg_EAGER_BLACKHOLE_info;
     cap->f.stgGCEnter1     = (StgFunPtr)__stg_gc_enter_1;
     cap->f.stgGCFun        = (StgFunPtr)__stg_gc_fun;
-
-    cap->mut_lists  = stgMallocBytes(sizeof(bdescr *) *
-                                     RtsFlags.GcFlags.generations,
-                                     "initCapability");
-    cap->saved_mut_lists = stgMallocBytes(sizeof(bdescr *) *
-                                          RtsFlags.GcFlags.generations,
-                                          "initCapability");
-
-    for (g = 0; g < RtsFlags.GcFlags.generations; g++) {
-        cap->mut_lists[g] = NULL;
-    }
-
     cap->weak_ptr_list_hd = NULL;
     cap->weak_ptr_list_tl = NULL;
     cap->free_tvar_watch_queues = END_STM_WATCH_QUEUE;
@@ -294,8 +282,6 @@ initCapability( Capability *cap, nat i )
     cap->free_trec_headers = NO_TREC;
     cap->transaction_tokens = 0;
     cap->context_switch = 0;
-    cap->pinned_object_block = NULL;
-    cap->pinned_object_blocks = NULL;
 
 #ifdef PROFILING
     cap->r.rCCCS = CCS_SYSTEM;
@@ -1074,7 +1060,6 @@ static void
 freeCapability (Capability *cap)
 {
     stgFree(cap->mut_lists);
-    stgFree(cap->saved_mut_lists);
 #if defined(THREADED_RTS)
     freeSparkPool(cap->sparks);
 #endif

@@ -774,10 +774,7 @@ findMemoryLeak (void)
     ResourceContainer *rc;
     for(rc = RC_LIST; rc != NULL; rc = rc->link) {
         markBlocks(rc->nursery->blocks);
-    }
-
-    for (i = 0; i < n_capabilities; i++) {
-        markBlocks(capabilities[i]->pinned_object_block);
+        markBlocks(rc->pinned_object_block);
     }
 
 #ifdef PROFILING
@@ -896,13 +893,10 @@ memInventory (rtsBool show)
 
   for(rc = RC_LIST; rc != NULL; rc = rc->link) {
     rc_blocks += countRCBlocks(rc);
-  }
-
-  for (i = 0; i < n_capabilities; i++) {
-      if (capabilities[i]->pinned_object_block != NULL) {
-          nursery_blocks += capabilities[i]->pinned_object_block->blocks;
+    if (rc->pinned_object_block != NULL) {
+          rc_blocks += rc->pinned_object_block->blocks;
       }
-      nursery_blocks += countBlocks(capabilities[i]->pinned_object_blocks);
+      rc_blocks += countBlocks(rc->pinned_object_blocks);
   }
 
   retainer_blocks = 0;

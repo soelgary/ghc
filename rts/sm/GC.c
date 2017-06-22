@@ -229,7 +229,7 @@ new_gc_thread (nat n, gc_thread *t)
         // Hence, allocate a block for todo_bd manually:
         {
             bdescr *bd = allocBlock(); // no lock, locks aren't initialised yet
-            initBdescr(bd, ws->gen, ws->gen->to);
+            initBdescr(bd, ws->gen, ws->gen->to, t->r.rCurrentTSO.rc);
             bd->flags = BF_EVACUATED;
             bd->u.scan = bd->free = bd->start;
 
@@ -663,10 +663,11 @@ prepare_collected_gen (generation *gen)
         bd->flags &= ~BF_EVACUATED;
     }
 
+    // TODO: This function needs to know which RC is being collected
     // mark the large objects as from-space
-    for (bd = gen->large_objects; bd; bd = bd->link) {
-        bd->flags &= ~BF_EVACUATED;
-    }
+    //for (bd = gen->large_objects; bd; bd = bd->link) {
+    //    bd->flags &= ~BF_EVACUATED;
+    //}
 
     // for a compacted generation, we need to allocate the bitmap
     if (gen->mark) {
@@ -719,8 +720,8 @@ prepare_collected_gen (generation *gen)
 static void
 stash_mut_list (Capability *cap, nat gen_no)
 {
-    cap->saved_mut_lists[gen_no] = cap->mut_lists[gen_no];
-    cap->mut_lists[gen_no] = allocBlock_sync();
+    cap->r.rCurrentTSO->rc->saved_mut_lists[gen_no] = cap->r.rCurrentTSO->rc->mut_lists[gen_no];
+    cap->r.rCurrentTSO->rc->mut_lists[gen_no] = allocBlock_sync();
 }
 
 /* ----------------------------------------------------------------------------
@@ -803,21 +804,24 @@ collect_gct_blocks (void)
 static void
 collect_pinned_object_blocks (void)
 {
+    // TODO: This needs to be fixed! pinned objects belong to RCs, not capabilities!
     nat n;
     bdescr *bd, *prev;
 
     for (n = 0; n < n_capabilities; n++) {
         prev = NULL;
-        for (bd = capabilities[n]->pinned_object_blocks; bd != NULL; bd = bd->link) {
-            prev = bd;
-        }
+        // TODO: This needs to know which RC is being collected!
+        //for (bd = capabilities[n]->pinned_object_blocks; bd != NULL; bd = bd->link) {
+        //    prev = bd;
+        //}
         if (prev != NULL) {
-            prev->link = g0->large_objects;
-            if (g0->large_objects != NULL) {
-                g0->large_objects->u.back = prev;
-            }
-            g0->large_objects = capabilities[n]->pinned_object_blocks;
-            capabilities[n]->pinned_object_blocks = 0;
+            // TODO: Same as above
+            //prev->link = g0->large_objects;
+            //if (g0->large_objects != NULL) {
+            //    g0->large_objects->u.back = prev;
+            //}
+            //g0->large_objects = capabilities[n]->pinned_object_blocks;
+            //capabilities[n]->pinned_object_blocks = 0;
         }
     }
 }
@@ -891,8 +895,9 @@ resize_generations (void)
         } else {
             words = oldest_gen->n_words;
         }
-        live = (words + BLOCK_SIZE_W - 1) / BLOCK_SIZE_W +
-            oldest_gen->n_large_blocks;
+        // TODO: fixme
+        //live = (words + BLOCK_SIZE_W - 1) / BLOCK_SIZE_W +
+         //   oldest_gen->n_large_blocks;
 
         // default max size for all generations except zero
         size = stg_max(live * RtsFlags.GcFlags.oldGenFactor,

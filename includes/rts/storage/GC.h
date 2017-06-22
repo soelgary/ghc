@@ -82,7 +82,24 @@ typedef struct ResourceContainer_ {
 
   HashTable *block_record;
 
-  bdescr *pinned_object_block; // FIGURE DIS SHIT OUT
+  // One mutable list per generation, so we don't need to take any
+  // locks when updating an old-generation thunk.  This also lets us
+  // keep track of which closures this CPU has been mutating, so we
+  // can traverse them using the right thread during GC and avoid
+  // unnecessarily moving the data from one cache to another.
+  bdescr **mut_lists;
+  bdescr **saved_mut_lists; // tmp use during GC
+
+  // block for allocating pinned objects into
+  bdescr *pinned_object_block;
+  // full pinned object blocks allocated since the last GC
+  bdescr *pinned_object_blocks;
+
+  bdescr *       large_objects;       // large objects (doubly linked)
+  memcount       n_large_blocks;      // no. of blocks used by large objs
+  memcount       n_large_words;       // no. of words used by large objs
+  memcount       n_new_large_words;   // words of new large objects
+                                      // (for doYouWantToGC())
 
   // rthread goes here but do this when working on the GC
 
@@ -126,12 +143,6 @@ typedef struct generation_ {
     memcount       n_blocks;            // number of blocks
     memcount       n_words;             // number of used words
 
-    bdescr *       large_objects;       // large objects (doubly linked)
-    memcount       n_large_blocks;      // no. of blocks used by large objs
-    memcount       n_large_words;       // no. of words used by large objs
-    memcount       n_new_large_words;   // words of new large objects
-                                        // (for doYouWantToGC())
-
     memcount       max_blocks;          // max blocks
 
     StgTSO *       threads;             // threads in this gen
@@ -144,6 +155,8 @@ typedef struct generation_ {
     nat collections;
     nat par_collections;
     nat failed_promotions;
+
+    memcount       n_new_large_words; // DONT USE THIS
 
     // ------------------------------------
     // Fields below are used during GC only
@@ -303,11 +316,12 @@ void dirty_MUT_VAR(StgRegTable *reg, StgClosure *p);
 /* (needed when dynamic libraries are used). */
 extern rtsBool keepCAFs;
 
-INLINE_HEADER void initBdescr(bdescr *bd, generation *gen, generation *dest)
+INLINE_HEADER void initBdescr(bdescr *bd, generation *gen, generation *dest, ResourceContainer *rc)
 {
     bd->gen     = gen;
     bd->gen_no  = gen->no;
     bd->dest_no = dest->no;
+    bd->rc = rc;
 }
 
 #endif /* RTS_STORAGE_GC_H */

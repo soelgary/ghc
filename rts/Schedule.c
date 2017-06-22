@@ -1136,7 +1136,7 @@ scheduleHandleHeapOverflow( Capability *cap, StgTSO *t )
             {
                 bdescr *x;
                 for (x = bd; x < bd + blocks; x++) {
-                    initBdescr(x,g0,g0);
+                    initBdescr(x,g0,g0, cap->r.rCurrentTSO->rc);
                     x->free = x->start;
                     x->flags = 0;
                 }

@@ -68,23 +68,12 @@ struct Capability_ {
     InCall *suspended_ccalls;
     uint32_t n_suspended_ccalls;
 
-    // One mutable list per generation, so we don't need to take any
-    // locks when updating an old-generation thunk.  This also lets us
-    // keep track of which closures this CPU has been mutating, so we
-    // can traverse them using the right thread during GC and avoid
-    // unnecessarily moving the data from one cache to another.
-    bdescr **mut_lists;
-    bdescr **saved_mut_lists; // tmp use during GC
-
-    // block for allocating pinned objects into
-    bdescr *pinned_object_block;
-    // full pinned object blocks allocated since the last GC
-    bdescr *pinned_object_blocks;
-
     // per-capability weak pointer list associated with nursery (older
     // lists stored in generation object)
     StgWeak *weak_ptr_list_hd;
     StgWeak *weak_ptr_list_tl;
+
+    bdescr **mut_lists; // DONT USE THIS
 
     // Context switch flag.  When non-zero, this means: stop running
     // Haskell code, and switch threads.
@@ -386,13 +375,13 @@ recordMutableCap (StgClosure *p, Capability *cap, nat gen)
     // We must own this Capability in order to modify its mutable list.
     //    ASSERT(cap->running_task == myTask());
     // NO: assertion is violated by performPendingThrowTos()
-    bd = cap->mut_lists[gen];
+    bd = cap->r.rCurrentTSO->rc->mut_lists[gen];
     if (bd->free >= bd->start + BLOCK_SIZE_W) {
         bdescr *new_bd;
         new_bd = allocBlock_lock();
         new_bd->link = bd;
         bd = new_bd;
-        cap->mut_lists[gen] = bd;
+        cap->r.rCurrentTSO->rc->mut_lists[gen] = bd;
     }
     *bd->free++ = (StgWord)p;
 }

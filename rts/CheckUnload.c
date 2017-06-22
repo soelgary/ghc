@@ -276,6 +276,7 @@ static void searchCostCentres (HashTable *addrs, CostCentreStack *ccs)
 //
 void checkUnload (StgClosure *static_objects)
 {
+  // TODO: This function should only be called on an RC!
   nat g, n;
   HashTable *addrs;
   StgClosure* p;
@@ -314,7 +315,7 @@ void checkUnload (StgClosure *static_objects)
 
   for (g = 0; g < RtsFlags.GcFlags.generations; g++) {
       searchHeapBlocks (addrs, generations[g].blocks);
-      searchHeapBlocks (addrs, generations[g].large_objects);
+      // searchHeapBlocks (addrs, generations[g].large_objects);
 
       for (n = 0; n < n_capabilities; n++) {
           ws = &gc_threads[n]->gens[g];

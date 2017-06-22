@@ -80,10 +80,6 @@ initGeneration (generation *gen, int g)
     gen->live_estimate = 0;
     gen->old_blocks = NULL;
     gen->n_old_blocks = 0;
-    gen->large_objects = NULL;
-    gen->n_large_blocks = 0;
-    gen->n_large_words = 0;
-    gen->n_new_large_words = 0;
     gen->scavenged_large_objects = NULL;
     gen->n_scavenged_large_blocks = 0;
     gen->mark = 0;
@@ -655,7 +651,7 @@ allocate (Capability *cap, W_ n)
 {
     bdescr *bd;
     StgPtr p;
-
+    ResourceContainer *rc cap->r.rCurrentTSO->rc;
     TICK_ALLOC_HEAP_NOCTR(WDS(n));
     CCS_ALLOC(cap->r.rCCCS,n);
     if (cap->r.rCurrentTSO != NULL) {
@@ -695,11 +691,11 @@ allocate (Capability *cap, W_ n)
 
         ACQUIRE_SM_LOCK
         bd = allocGroup(req_blocks);
-        dbl_link_onto(bd, &g0->large_objects);
-        g0->n_large_blocks += bd->blocks; // might be larger than req_blocks
-        g0->n_new_large_words += n;
+        dbl_link_onto(bd, &rc->large_objects);
+        rc->n_large_blocks += bd->blocks; // might be larger than req_blocks
+        rc->n_new_large_words += n;
         RELEASE_SM_LOCK;
-        initBdescr(bd, g0, g0);
+        initBdescr(bd, g0, g0, rc);
         bd->flags = BF_LARGE;
         bd->free = bd->start + n;
         cap->total_allocated += n;
@@ -725,7 +721,7 @@ allocate (Capability *cap, W_ n)
             bd = allocBlock();
             cap->r.rNursery->n_blocks++;
             RELEASE_SM_LOCK;
-            initBdescr(bd, g0, g0);
+            initBdescr(bd, g0, g0, rc);
             bd->flags = 0;
             // If we had to allocate a new block, then we'll GC
             // pretty quickly now, because MAYBE_GC() will
@@ -816,7 +812,7 @@ allocatePinned (Capability *cap, W_ n)
                       - n*sizeof(W_)));
     }
 
-    bd = cap->pinned_object_block;
+    bd = cap->r.rCurrentTSO->rc->pinned_object_block;
     
     // If we don't have a block of pinned objects yet, or the current
     // one isn't large enough to hold the new object, get a new one.
@@ -828,7 +824,7 @@ allocatePinned (Capability *cap, W_ n)
         if (bd != NULL) {
             // add it to the allocation stats when the block is full
             finishedNurseryBlock(cap, bd);
-            dbl_link_onto(bd, &cap->pinned_object_blocks);
+            dbl_link_onto(bd, &cap->r.rCurrentTSO->rc->pinned_object_blocks);
         }
 
         // We need to find another block.  We could just allocate one,
@@ -867,7 +863,7 @@ allocatePinned (Capability *cap, W_ n)
             cap->r.rNursery->n_blocks -= bd->blocks;
         }
 
-        cap->pinned_object_block = bd;
+        cap->r.rCurrentTSO->rc->pinned_object_block = bd;
         bd->flags  = BF_PINNED | BF_LARGE | BF_EVACUATED;
 
         // The pinned_object_block remains attached to the capability

@@ -1128,11 +1128,14 @@ void heapCensus (Time t)
 #endif
 
   // Traverse the heap, collecting the census info
+  // Are we interested in large objects?  might be
+  // confusing to include the stack in a heap profile.
+  ResourceContainer *rc;
+  for(rc = RC_LIST; rc != NULL; rc = rc->link) {
+    heapCensusChain( census, rc->large_objects );
+  }
   for (g = 0; g < RtsFlags.GcFlags.generations; g++) {
       heapCensusChain( census, generations[g].blocks );
-      // Are we interested in large objects?  might be
-      // confusing to include the stack in a heap profile.
-      heapCensusChain( census, generations[g].large_objects );
 
       for (n = 0; n < n_capabilities; n++) {
           ws = &gc_threads[n]->gens[g];

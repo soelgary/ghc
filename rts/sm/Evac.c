@@ -281,7 +281,7 @@ evacuate_large(StgPtr p)
   if (bd->u.back) {
     bd->u.back->link = bd->link;
   } else { // first object in the list
-    gen->large_objects = bd->link;
+    bd->rc->large_objects = bd->link;
   }
   if (bd->link) {
     bd->link->u.back = bd->u.back;
@@ -303,7 +303,7 @@ evacuate_large(StgPtr p)
   new_gen = &generations[new_gen_no];
 
   bd->flags |= BF_EVACUATED;
-  initBdescr(bd, new_gen, new_gen->to);
+  initBdescr(bd, new_gen, new_gen->to, bd->rc);
 
   // If this is a block of pinned objects, we don't have to scan
   // these objects, because they aren't allowed to contain any
