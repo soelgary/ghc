@@ -19,7 +19,9 @@ bdescr *allocBlockFor(ResourceContainer *rc);
 StgRC *newRC(ResourceContainer *parent, nat max_blocks);
 void killRC(ResourceContainer *rc);
 
-void initRC();
+void initRC(void);
+
+W_ countRCBlocks(ResourceContainer *rc);
 
 #include "EndPrivate.h"
 

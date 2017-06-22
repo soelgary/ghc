@@ -28,6 +28,7 @@
 #include "Printer.h"
 #include "Arena.h"
 #include "RetainerProfile.h"
+#include "ResourceLimits.h"
 
 /* -----------------------------------------------------------------------------
    Forward decls.
@@ -758,16 +759,21 @@ findMemoryLeak (void)
     for (g = 0; g < RtsFlags.GcFlags.generations; g++) {
         for (i = 0; i < n_capabilities; i++) {
             markBlocks(capabilities[i]->mut_lists[g]);
-            markBlocks(gc_threads[i]->gens[g].part_list);
-            markBlocks(gc_threads[i]->gens[g].scavd_list);
-            markBlocks(gc_threads[i]->gens[g].todo_bd);
+            //markBlocks(gc_threads[i]->gens[g].part_list);
+            //markBlocks(gc_threads[i]->gens[g].scavd_list);
+            //markBlocks(gc_threads[i]->gens[g].todo_bd);
         }
-        markBlocks(generations[g].blocks);
+        markBlocks(generations[g].blocks); // COULD BE THIS???
         markBlocks(generations[g].large_objects);
     }
 
-    for (i = 0; i < n_nurseries; i++) {
-        markBlocks(nurseries[i].blocks);
+    //for (i = 0; i < n_nurseries; i++) {
+    //    markBlocks(nurseries[i].blocks);
+    //}
+
+    ResourceContainer *rc;
+    for(rc = RC_LIST; rc != NULL; rc = rc->link) {
+        markBlocks(rc->nursery->blocks);
     }
 
     for (i = 0; i < n_capabilities; i++) {
@@ -834,17 +840,30 @@ genBlocks (generation *gen)
 {
     ASSERT(countBlocks(gen->blocks) == gen->n_blocks);
     ASSERT(countBlocks(gen->large_objects) == gen->n_large_blocks);
-    return gen->n_blocks + gen->n_old_blocks +
-            countAllocdBlocks(gen->large_objects);
+    ASSERT(countBlocks(gen->old_blocks) == gen->n_old_blocks);
+    //return gen->n_blocks + gen->n_old_blocks +
+    //        countAllocdBlocks(gen->large_objects);
+    // TODO: Need to move large_objects and n_old_blocks to RCs
+    return gen->n_old_blocks + countBlocks(gen->large_objects) + gen->n_blocks;
 }
 
 void
 memInventory (rtsBool show)
 {
+
+  /*
+    Now that we use RCs, how should we count blocks?
+      - Do not count each nursery or generation.
+      - Count the number in each RC
+      - Count the number in each capability mut_list (each RC should have one instead)
+      - Count the number in each capability pinned_object_block (eac RC should have one instead)
+      - 
+  */
+
   nat g, i;
   W_ gen_blocks[RtsFlags.GcFlags.generations];
   W_ nursery_blocks, retainer_blocks,
-       arena_blocks, exec_blocks;
+       arena_blocks, exec_blocks, rc_blocks;
   W_ live_blocks = 0, free_blocks = 0;
   rtsBool leak;
 
@@ -854,18 +873,31 @@ memInventory (rtsBool show)
       gen_blocks[g] = 0;
       for (i = 0; i < n_capabilities; i++) {
           gen_blocks[g] += countBlocks(capabilities[i]->mut_lists[g]);
+          
+          /* TODO: Add this back! Once we get the GC working, this will fail
+                   because we arent accounting for gc_threads! */
           gen_blocks[g] += countBlocks(gc_threads[i]->gens[g].part_list);
           gen_blocks[g] += countBlocks(gc_threads[i]->gens[g].scavd_list);
           gen_blocks[g] += countBlocks(gc_threads[i]->gens[g].todo_bd);
+          
+
       }
       gen_blocks[g] += genBlocks(&generations[g]);
   }
 
   nursery_blocks = 0;
-  for (i = 0; i < n_nurseries; i++) {
-      ASSERT(countBlocks(nurseries[i].blocks) == nurseries[i].n_blocks);
-      nursery_blocks += nurseries[i].n_blocks;
+  //for (i = 0; i < n_nurseries; i++) {
+  //    ASSERT(countBlocks(nurseries[i].blocks) == nurseries[i].n_blocks);
+  //    nursery_blocks += nurseries[i].n_blocks;
+  //}
+
+  ResourceContainer *rc;
+  rc_blocks = 0;
+
+  for(rc = RC_LIST; rc != NULL; rc = rc->link) {
+    rc_blocks += countRCBlocks(rc);
   }
+
   for (i = 0; i < n_capabilities; i++) {
       if (capabilities[i]->pinned_object_block != NULL) {
           nursery_blocks += capabilities[i]->pinned_object_block->blocks;
@@ -894,7 +926,7 @@ memInventory (rtsBool show)
       live_blocks += gen_blocks[g];
   }
   live_blocks += nursery_blocks +
-               + retainer_blocks + arena_blocks + exec_blocks;
+               + retainer_blocks + arena_blocks + exec_blocks + rc_blocks;
 
 #define MB(n) (((double)(n) * BLOCK_SIZE_W) / ((1024*1024)/sizeof(W_)))
 
@@ -921,6 +953,8 @@ memInventory (rtsBool show)
                  exec_blocks, MB(exec_blocks));
       debugBelch("  free         : %5" FMT_Word " blocks (%6.1lf MB)\n",
                  free_blocks, MB(free_blocks));
+      debugBelch("  RC blocks    : %5" FMT_Word " blocks (%6.1lf MB)\n",
+                 rc_blocks, MB(rc_blocks));
       debugBelch("  total        : %5" FMT_Word " blocks (%6.1lf MB)\n",
                  live_blocks + free_blocks, MB(live_blocks+free_blocks));
       if (leak) {

@@ -99,7 +99,7 @@ newRC(ResourceContainer *parent, nat max_blocks)
   rc->nursery = nurse;
   rc->currentAlloc = bd;
   
-  rc->link = parent;
+  rc->link = RC_LIST;
   rc->children = NULL;
 
   if(parent != NULL) {
@@ -129,4 +129,28 @@ initRC()
       capabilities[i]->r.rCurrentAlloc = NULL;
   }
 
+}
+
+/*
+  Count the number of blocks allocated and owned by this RC. This is used for
+  accounting in debug to find memory leaks (See Sanity.c:memInventory).
+*/
+W_
+countRCBlocks(ResourceContainer *rc)
+{
+  W_ numBlocks = 0;
+
+  bdescr *bd;
+
+  for(bd = rc->nursery->blocks; bd != NULL;) {
+    numBlocks++;
+    bd = bd->link;
+  }
+
+  /*
+    TODO: RCs only track the nursery. We need to also keep track of blocks in
+          the generations.
+  */
+
+  return numBlocks;
 }
