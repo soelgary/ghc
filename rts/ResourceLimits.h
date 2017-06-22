@@ -19,6 +19,8 @@ bdescr *allocBlockFor(ResourceContainer *rc);
 StgRC *newRC(ResourceContainer *parent, nat max_blocks);
 void killRC(ResourceContainer *rc);
 
+void initRC();
+
 #include "EndPrivate.h"
 
 #endif /* RESOURCE_LIMITS_H */

@@ -23,6 +23,7 @@
 #include "Printer.h"
 #include "sm/Sanity.h"
 #include "sm/Storage.h"
+// #include "ResourceLimits.h"
 
 #include <string.h>
 
@@ -45,12 +46,10 @@ static StgThreadID next_thread_id = 1;
 
 /* ---------------------------------------------------------------------------
    Create a new thread.
-
    The new thread starts with the given stack size.  Before the
    scheduler can run, however, this thread needs to have a closure
    (and possibly some arguments) pushed on its stack.  See
    pushClosure() in Schedule.h.
-
    createGenThread() and createIOThread() (in SchedAPI.h) are
    convenient packaged versions of this function.
    ------------------------------------------------------------------------ */
@@ -60,6 +59,17 @@ createThread(Capability *cap, W_ size)
     StgTSO *tso;
     StgStack *stack;
     nat stack_size;
+
+    //ResourceContainer *rc;
+
+    //if (cap->r.rCurrentTSO == NULL) {
+    //    rc = RC_MAIN;
+    //} else {
+    //    rc = newRC(cap->r.rCurrentTSO->rc, 0)->rc;
+    //}
+
+    //bdescr *savedCurrentAlloc = cap->r.rCurrentAlloc;
+    //cap->r.rCurrentAlloc = rc->currentAlloc;
 
     /* sched_mutex is *not* required */
 
@@ -131,6 +141,8 @@ createThread(Capability *cap, W_ size)
 
     // ToDo: report the stack size in the event?
     traceEventCreateThread(cap, tso);
+
+    //cap->r.rCurrentAlloc = savedCurrentAlloc;
 
     return tso;
 }
@@ -251,11 +263,9 @@ removeThreadFromDeQueue (Capability *cap,
 
 /* ----------------------------------------------------------------------------
    tryWakeupThread()
-
    Attempt to wake up a thread.  tryWakeupThread is idempotent: it is
    always safe to call it too many times, but it is not safe in
    general to omit a call.
-
    ------------------------------------------------------------------------- */
 
 void
@@ -355,7 +365,6 @@ migrateThread (Capability *from, StgTSO *tso, Capability *to)
 
 /* ----------------------------------------------------------------------------
    awakenBlockedQueue
-
    wakes up all the threads on the specified queue.
    ------------------------------------------------------------------------- */
 
@@ -424,7 +433,6 @@ checkBlockingQueues (Capability *cap, StgTSO *tso)
 
 /* ----------------------------------------------------------------------------
    updateThunk
-
    Update a thunk with a value.  In order to do this, we need to know
    which TSO owns (or is evaluating) the thunk, in case we need to
    awaken any threads that are blocked on it.
@@ -508,7 +516,6 @@ isThreadBound(StgTSO* tso USED_IF_THREADS)
 
 /* -----------------------------------------------------------------------------
    Stack overflow
-
    If the thread has reached its maximum stack size, then raise the
    StackOverflow exception in the offending thread.  Otherwise
    relocate the TSO into a larger chunk of memory and adjust its stack

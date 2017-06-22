@@ -210,7 +210,8 @@ void storageAddCapabilities (nat from, nat to)
     // TODO: We dont care about this right meow. Rewrite this when we get to the
     // GC
 
-    /*nat n, g;
+    // TODO: Each RC should have a mut_list!
+    nat n, g;
     // allocate a block for each mut list
     for (n = from; n < to; n++) {
         for (g = 1; g < RtsFlags.GcFlags.generations; g++) {
@@ -220,7 +221,7 @@ void storageAddCapabilities (nat from, nat to)
 #if defined(THREADED_RTS) && defined(llvm_CC_FLAVOR) && (CC_SUPPORTS_TLS == 0)
     newThreadLocalKey(&gctKey);
 #endif
-    initGcThreads(from, to);*/
+    initGcThreads(from, to);
 }
 
 

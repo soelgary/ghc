@@ -35,6 +35,7 @@
 #include "FileLock.h"
 #include "LinkerInternals.h"
 #include "LibdwPool.h"
+#include "ResourceLimits.h"
 
 #if defined(PROFILING)
 # include "ProfHeap.h"
@@ -179,6 +180,8 @@ hs_init_ghc(int *argc, char **argv[], RtsConfig rts_config)
 
     /* initialize the storage manager */
     initStorage();
+
+    initRC();
 
     /* initialise the stable pointer table */
     initStableTables();

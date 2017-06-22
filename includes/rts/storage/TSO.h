@@ -90,11 +90,9 @@ typedef struct StgTSO_ {
       * cap->run_queue_{hd,tl}
       * (non-THREADED_RTS); the blocked_queue
       * and pointing to the next chunk for a ThreadOldStack
-
        NOTE!!!  do not modify _link directly, it is subject to
        a write barrier for generational GC.  Instead use the
        setTSOLink() function.  Exceptions to this rule are:
-
        * setting the link field to END_TSO_QUEUE
        * setting the link field of the currently running TSO, as it
          will already be dirty.
@@ -174,6 +172,8 @@ typedef struct StgTSO_ {
      */
     StgWord32  tot_stack_size;
 
+    struct ResourceContainer_ *rc;
+
 #ifdef TICKY_TICKY
     /* TICKY-specific stuff would go here. */
 #endif
@@ -213,58 +213,42 @@ void dirty_STACK (Capability *cap, StgStack *stack);
 
 /* -----------------------------------------------------------------------------
    Invariants:
-
    An active thread has the following properties:
-
       tso->stack < tso->sp < tso->stack+tso->stack_size
       tso->stack_size <= tso->max_stack_size
-
       RESERVED_STACK_WORDS is large enough for any heap-check or
       stack-check failure.
-
       The size of the TSO struct plus the stack is either
         (a) smaller than a block, or
         (b) a multiple of BLOCK_SIZE
-
         tso->why_blocked       tso->block_info      location
         ----------------------------------------------------------------------
         NotBlocked             END_TSO_QUEUE        runnable_queue, or running
-
         BlockedOnBlackHole     MessageBlackHole *   TSO->bq
-
         BlockedOnMVar          the MVAR             the MVAR's queue
-
         BlockedOnSTM           END_TSO_QUEUE        STM wait queue(s)
         BlockedOnSTM           STM_AWOKEN           run queue
-
         BlockedOnMsgThrowTo    MessageThrowTo *     TSO->blocked_exception
-
         BlockedOnRead          NULL                 blocked_queue
         BlockedOnWrite         NULL                 blocked_queue
         BlockedOnDelay         NULL                 blocked_queue
         BlockedOnGA            closure TSO blocks on   BQ of that closure
         BlockedOnGA_NoSend     closure TSO blocks on   BQ of that closure
-
       tso->link == END_TSO_QUEUE, if the thread is currently running.
-
    A zombie thread has the following properties:
-
       tso->what_next == ThreadComplete or ThreadKilled
       tso->link     ==  (could be on some queue somewhere)
       tso->sp       ==  tso->stack + tso->stack_size - 1 (i.e. top stack word)
       tso->sp[0]    ==  return value of thread, if what_next == ThreadComplete,
                         exception             , if what_next == ThreadKilled
-
       (tso->sp is left pointing at the top word on the stack so that
       the return value or exception will be retained by a GC).
-
    The 2 cases BlockedOnGA and BlockedOnGA_NoSend are needed in a GUM
    setup only. They mark a TSO that has entered a FETCH_ME or
    FETCH_ME_BQ closure, respectively; only the first TSO hitting the
    closure will send a Fetch message.
    Currently we have no separate code for blocking on an RBH; we use the
    BlockedOnBlackHole case for that.   -- HWL
-
  ---------------------------------------------------------------------------- */
 
 /* this is the NIL ptr for a TSO queue (e.g. runnable queue) */

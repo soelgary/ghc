@@ -7,6 +7,7 @@
 #include "Schedule.h"
 #include "sm/BlockAlloc.h"
 #include "Hash.h"
+#include "Capability.h"
 
 ResourceContainer *RC_MAIN = NULL;
 ResourceContainer *RC_LIST = NULL;
@@ -108,4 +109,24 @@ newRC(ResourceContainer *parent, nat max_blocks)
   RC_LIST = rc;
   RC_COUNT++;
   return stgRC;
+}
+
+void
+initRC()
+{
+
+  // Set up Resource Containers
+  StgRC *stgRC = newRC(NULL, 0);
+  RC_MAIN = stgRC->rc;
+
+  nat i;
+
+  newNurseryBlock(RC_MAIN->nursery->blocks);
+
+  for (i = 0; i < n_capabilities; i++) {
+      capabilities[i]->r.rNursery = RC_MAIN->nursery;
+      capabilities[i]->r.rCurrentNursery = RC_MAIN->nursery->blocks;
+      capabilities[i]->r.rCurrentAlloc = NULL;
+  }
+
 }
