@@ -16,6 +16,8 @@
 #include "Hash.h"
 #include "Printer.h"
 #include "RtsUtils.h"
+#include "ResourceLimits.h"
+
 
 #ifdef PROFILING
 #include "Profiling.h"
@@ -769,16 +771,18 @@ findPtr(P_ p, int follow)
   int i = 0;
   searched = 0;
 
-  for (n = 0; n < n_capabilities; n++) {
-      bd = nurseries[i].blocks;
+  ResourceContainer *rc;
+
+  for (rc = RC_LIST; rc != NULL; rc = rc->link) {
+      bd = rc->nursery->blocks;
       i = findPtrBlocks(p,bd,arr,arr_size,i);
       if (i >= arr_size) return;
   }
 
-  for (g = 0; g < RtsFlags.GcFlags.generations; g++) {
-      bd = generations[g].blocks;
+  for (rc = RC_LIST; rc != NULL; rc = rc->link) {
+      bd = rc->blocks;
       i = findPtrBlocks(p,bd,arr,arr_size,i);
-      bd = generations[g].large_objects;
+      bd = rc->large_objects;
       i = findPtrBlocks(p,bd,arr,arr_size,i);
       if (i >= arr_size) return;
   }

@@ -101,6 +101,10 @@ typedef struct ResourceContainer_ {
   memcount       n_new_large_words;   // words of new large objects
                                       // (for doYouWantToGC())
 
+  bdescr *       blocks;              // blocks in this RC
+  memcount       n_blocks;            // number of blocks
+  memcount       n_words;             // number of used words
+
   // rthread goes here but do this when working on the GC
 
   nursery *nursery;
@@ -138,10 +142,6 @@ struct nursery_ {
 
 typedef struct generation_ {
     nat            no;                  // generation number
-
-    bdescr *       blocks;              // blocks in this gen
-    memcount       n_blocks;            // number of blocks
-    memcount       n_words;             // number of used words
 
     memcount       max_blocks;          // max blocks
 

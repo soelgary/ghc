@@ -1133,10 +1133,9 @@ void heapCensus (Time t)
   ResourceContainer *rc;
   for(rc = RC_LIST; rc != NULL; rc = rc->link) {
     heapCensusChain( census, rc->large_objects );
+    heapCensusChain( census, rc->blocks );
   }
   for (g = 0; g < RtsFlags.GcFlags.generations; g++) {
-      heapCensusChain( census, generations[g].blocks );
-
       for (n = 0; n < n_capabilities; n++) {
           ws = &gc_threads[n]->gens[g];
           heapCensusChain(census, ws->todo_bd);

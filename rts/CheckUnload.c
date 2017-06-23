@@ -314,7 +314,8 @@ void checkUnload (StgClosure *static_objects)
   }
 
   for (g = 0; g < RtsFlags.GcFlags.generations; g++) {
-      searchHeapBlocks (addrs, generations[g].blocks);
+      // TODO: Port this to RCs!
+      // searchHeapBlocks (addrs, generations[g].blocks);
       // searchHeapBlocks (addrs, generations[g].large_objects);
 
       for (n = 0; n < n_capabilities; n++) {

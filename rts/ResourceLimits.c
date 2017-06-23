@@ -107,6 +107,10 @@ newRC(ResourceContainer *parent, nat max_blocks)
   rc->n_large_words = 0;
   rc->n_new_large_words = 0;
 
+  rc->blocks = NULL;
+  rc->n_blocks = 0;
+  rc->n_words = 0;
+
   rc->mut_lists  = stgMallocBytes(sizeof(bdescr *) *
                                      RtsFlags.GcFlags.generations,
                                      "newRC");
@@ -115,7 +119,7 @@ newRC(ResourceContainer *parent, nat max_blocks)
                                         "newRC");
   nat g;
   for (g = 0; g < RtsFlags.GcFlags.generations; g++) {
-    rc->mut_lists[g] = NULL;
+    rc->mut_lists[g] = allocBlockFor(rc);
   }
 
   rc->link = RC_LIST;
@@ -157,14 +161,19 @@ initRC()
 W_
 countRCBlocks(ResourceContainer *rc)
 {
+  ASSERT(countBlocks(rc->blocks) == rc->n_blocks);
+  ASSERT(countBlocks(rc->large_objects) == rc->n_large_blocks);
+
   W_ numBlocks = 0;
 
   bdescr *bd;
 
-  for(bd = rc->nursery->blocks; bd != NULL;) {
+  for (bd = rc->nursery->blocks; bd != NULL;) {
     numBlocks++;
     bd = bd->link;
   }
+
+  numBlocks += countBlocks(rc->large_objects) + rc->n_blocks;
 
   /*
     TODO: RCs only track the nursery. We need to also keep track of blocks in

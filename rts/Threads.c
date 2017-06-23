@@ -23,7 +23,7 @@
 #include "Printer.h"
 #include "sm/Sanity.h"
 #include "sm/Storage.h"
-// #include "ResourceLimits.h"
+#include "ResourceLimits.h"
 
 #include <string.h>
 
@@ -60,13 +60,13 @@ createThread(Capability *cap, W_ size)
     StgStack *stack;
     nat stack_size;
 
-    //ResourceContainer *rc;
+    ResourceContainer *rc;
 
-    //if (cap->r.rCurrentTSO == NULL) {
-    //    rc = RC_MAIN;
-    //} else {
-    //    rc = newRC(cap->r.rCurrentTSO->rc, 0)->rc;
-    //}
+    if (cap->r.rCurrentTSO == NULL) {
+        rc = RC_MAIN;
+    } else {
+        rc = newRC(cap->r.rCurrentTSO->rc, 0)->rc;
+    }
 
     //bdescr *savedCurrentAlloc = cap->r.rCurrentAlloc;
     //cap->r.rCurrentAlloc = rc->currentAlloc;

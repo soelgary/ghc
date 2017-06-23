@@ -372,16 +372,23 @@ recordMutableCap (StgClosure *p, Capability *cap, nat gen)
 {
     bdescr *bd;
 
+    ResourceContainer *rc;
+
+    if (cap->r.rCurrentTSO->rc == NULL) {
+        rc = RC_MAIN;
+    } else {
+        rc = cap->r.rCurrentTSO->rc;
+    }
     // We must own this Capability in order to modify its mutable list.
     //    ASSERT(cap->running_task == myTask());
     // NO: assertion is violated by performPendingThrowTos()
-    bd = cap->r.rCurrentTSO->rc->mut_lists[gen];
+    bd = rc->mut_lists[gen];
     if (bd->free >= bd->start + BLOCK_SIZE_W) {
         bdescr *new_bd;
         new_bd = allocBlock_lock();
         new_bd->link = bd;
         bd = new_bd;
-        cap->r.rCurrentTSO->rc->mut_lists[gen] = bd;
+        rc->mut_lists[gen] = bd;
     }
     *bd->free++ = (StgWord)p;
 }

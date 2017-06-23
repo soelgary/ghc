@@ -689,15 +689,21 @@ checkNurserySanity (nursery *nursery)
 
     ASSERT(blocks == nursery->n_blocks);
 }
+static void
+checkRC(ResourceContainer *rc)
+{
+    ASSERT(countBlocks(rc->blocks) == rc->n_blocks);
+    ASSERT(countBlocks(rc->large_objects) == rc->n_large_blocks);
+
+    checkHeapChain(rc->blocks);
+    checkLargeObjects(rc->large_objects);
+}
 
 static void checkGeneration (generation *gen,
                              rtsBool after_major_gc USED_IF_THREADS)
 {
     nat n;
     gen_workspace *ws;
-
-    ASSERT(countBlocks(gen->blocks) == gen->n_blocks);
-    ASSERT(countBlocks(gen->large_objects) == gen->n_large_blocks);
 
 #if defined(THREADED_RTS)
     // heap sanity checking doesn't work with SMP, because we can't
@@ -706,23 +712,23 @@ static void checkGeneration (generation *gen,
     if (!after_major_gc) return;
 #endif
 
-    checkHeapChain(gen->blocks);
-
     for (n = 0; n < n_capabilities; n++) {
         ws = &gc_threads[n]->gens[gen->no];
         checkHeapChain(ws->todo_bd);
         checkHeapChain(ws->part_list);
         checkHeapChain(ws->scavd_list);
     }
-
-    checkLargeObjects(gen->large_objects);
 }
 
 /* Full heap sanity check. */
 static void checkFullHeap (rtsBool after_major_gc)
 {
     nat g, n;
+    ResourceContainer *rc;
 
+    for (rc = RC_LIST; rc != NULL; rc = rc->link) {
+        checkRC(rc);
+    }
     for (g = 0; g < RtsFlags.GcFlags.generations; g++) {
         checkGeneration(&generations[g], after_major_gc);
     }
@@ -763,8 +769,6 @@ findMemoryLeak (void)
             //markBlocks(gc_threads[i]->gens[g].scavd_list);
             //markBlocks(gc_threads[i]->gens[g].todo_bd);
         }
-        markBlocks(generations[g].blocks); // COULD BE THIS???
-        markBlocks(generations[g].large_objects);
     }
 
     //for (i = 0; i < n_nurseries; i++) {
@@ -775,6 +779,8 @@ findMemoryLeak (void)
     for(rc = RC_LIST; rc != NULL; rc = rc->link) {
         markBlocks(rc->nursery->blocks);
         markBlocks(rc->pinned_object_block);
+        markBlocks(rc->blocks);
+        markBlocks(rc->large_objects);
     }
 
 #ifdef PROFILING
@@ -835,13 +841,14 @@ void findSlop(bdescr *bd)
 static W_
 genBlocks (generation *gen)
 {
-    ASSERT(countBlocks(gen->blocks) == gen->n_blocks);
-    ASSERT(countBlocks(gen->large_objects) == gen->n_large_blocks);
     ASSERT(countBlocks(gen->old_blocks) == gen->n_old_blocks);
+    /*ASSERT(countBlocks(gen->blocks) == gen->n_blocks);
+    ASSERT(countBlocks(gen->large_objects) == gen->n_large_blocks);
     //return gen->n_blocks + gen->n_old_blocks +
     //        countAllocdBlocks(gen->large_objects);
     // TODO: Need to move large_objects and n_old_blocks to RCs
-    return gen->n_old_blocks + countBlocks(gen->large_objects) + gen->n_blocks;
+    return gen->n_old_blocks + countBlocks(gen->large_objects) + gen->n_blocks;*/
+    return gen->n_old_blocks;
 }
 
 void
@@ -870,14 +877,9 @@ memInventory (rtsBool show)
       gen_blocks[g] = 0;
       for (i = 0; i < n_capabilities; i++) {
           gen_blocks[g] += countBlocks(capabilities[i]->mut_lists[g]);
-          
-          /* TODO: Add this back! Once we get the GC working, this will fail
-                   because we arent accounting for gc_threads! */
           gen_blocks[g] += countBlocks(gc_threads[i]->gens[g].part_list);
           gen_blocks[g] += countBlocks(gc_threads[i]->gens[g].scavd_list);
           gen_blocks[g] += countBlocks(gc_threads[i]->gens[g].todo_bd);
-          
-
       }
       gen_blocks[g] += genBlocks(&generations[g]);
   }

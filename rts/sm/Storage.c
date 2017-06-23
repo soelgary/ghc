@@ -74,9 +74,6 @@ initGeneration (generation *gen, int g)
     gen->par_collections = 0;
     gen->failed_promotions = 0;
     gen->max_blocks = 0;
-    gen->blocks = NULL;
-    gen->n_blocks = 0;
-    gen->n_words = 0;
     gen->live_estimate = 0;
     gen->old_blocks = NULL;
     gen->n_old_blocks = 0;
@@ -211,7 +208,9 @@ void storageAddCapabilities (nat from, nat to)
     // allocate a block for each mut list
     for (n = from; n < to; n++) {
         for (g = 1; g < RtsFlags.GcFlags.generations; g++) {
-            capabilities[n]->mut_lists[g] = allocBlock();
+            // TODO: mut_lists are now in RCs. Make sure this is the case during
+            // allocations
+            //capabilities[n]->mut_lists[g] = allocBlock();
         }
     }
 #if defined(THREADED_RTS) && defined(llvm_CC_FLAVOR) && (CC_SUPPORTS_TLS == 0)
@@ -480,7 +479,7 @@ allocNursery (bdescr *tail, W_ blocks, ResourceContainer *rc)
         blocks -= n;
 
         for (i = 0; i < n; i++) {
-            initBdescr(&bd[i], g0, g0);
+            initBdescr(&bd[i], g0, g0, rc);
 
             bd[i].blocks = 1;
             bd[i].flags = 0;
@@ -651,7 +650,14 @@ allocate (Capability *cap, W_ n)
 {
     bdescr *bd;
     StgPtr p;
-    ResourceContainer *rc cap->r.rCurrentTSO->rc;
+
+    ResourceContainer *rc;
+    if (cap->r.rCurrentTSO == NULL || cap->r.rCurrentTSO->rc == NULL) {
+        rc = RC_MAIN;
+    } else {
+        rc = cap->r.rCurrentTSO->rc;
+    }
+
     TICK_ALLOC_HEAP_NOCTR(WDS(n));
     CCS_ALLOC(cap->r.rCCCS,n);
     if (cap->r.rCurrentTSO != NULL) {
@@ -795,6 +801,13 @@ allocatePinned (Capability *cap, W_ n)
     StgPtr p;
     bdescr *bd;
 
+    ResourceContainer *rc;
+    if (cap->r.rCurrentTSO->rc == NULL) {
+        rc = RC_MAIN;
+    } else {
+        rc = cap->r.rCurrentTSO->rc;
+    }
+
     // If the request is for a large object, then allocate()
     // will give us a pinned object anyway.
     if (n >= LARGE_OBJECT_THRESHOLD/sizeof(W_)) {
@@ -812,8 +825,8 @@ allocatePinned (Capability *cap, W_ n)
                       - n*sizeof(W_)));
     }
 
-    bd = cap->r.rCurrentTSO->rc->pinned_object_block;
-    
+    bd = rc->pinned_object_block;
+
     // If we don't have a block of pinned objects yet, or the current
     // one isn't large enough to hold the new object, get a new one.
     if (bd == NULL || (bd->free + n) > (bd->start + BLOCK_SIZE_W)) {
@@ -824,7 +837,7 @@ allocatePinned (Capability *cap, W_ n)
         if (bd != NULL) {
             // add it to the allocation stats when the block is full
             finishedNurseryBlock(cap, bd);
-            dbl_link_onto(bd, &cap->r.rCurrentTSO->rc->pinned_object_blocks);
+            dbl_link_onto(bd, &rc->pinned_object_blocks);
         }
 
         // We need to find another block.  We could just allocate one,
@@ -852,7 +865,7 @@ allocatePinned (Capability *cap, W_ n)
             ACQUIRE_SM_LOCK;
             bd = allocBlock();
             RELEASE_SM_LOCK;
-            initBdescr(bd, g0, g0);
+            initBdescr(bd, g0, g0, rc);
         } else {
             newNurseryBlock(bd);
             // we have a block in the nursery: steal it
@@ -1045,12 +1058,25 @@ W_ countOccupied (bdescr *bd)
 
 W_ genLiveWords (generation *gen)
 {
-    return gen->n_words + gen->n_large_words;
+    // TODO: Moved to `rcLiveWords`
+    //return gen->n_words + gen->n_large_words;
+    barf("genLiveWords no longer exists. Use rcLiveWords instead");
+}
+
+W_ rcLiveWords (ResourceContainer *rc)
+{
+    return rc->n_words + rc->n_large_words;
 }
 
 W_ genLiveBlocks (generation *gen)
 {
-    return gen->n_blocks + gen->n_large_blocks;
+    //return gen->n_blocks + gen->n_large_blocks;
+    barf("genLiveWords no longer exists. Use rcLiveWords instead");
+}
+
+W_ rcLiveBlocks (ResourceContainer *rc)
+{
+    return rc->n_blocks +rc->n_large_blocks;
 }
 
 W_ gcThreadLiveWords (nat i, nat g)
@@ -1080,24 +1106,26 @@ W_ gcThreadLiveBlocks (nat i, nat g)
 // generation 0.
 W_ calcLiveWords (void)
 {
-    nat g;
     W_ live;
+    ResourceContainer *rc;
 
     live = 0;
-    for (g = 0; g < RtsFlags.GcFlags.generations; g++) {
-        live += genLiveWords(&generations[g]);
+
+    for (rc = RC_LIST; rc != NULL; rc = rc->link) {
+        live += rcLiveWords(rc);
     }
     return live;
 }
 
 W_ calcLiveBlocks (void)
 {
-    nat g;
     W_ live;
+    ResourceContainer *rc;
 
     live = 0;
-    for (g = 0; g < RtsFlags.GcFlags.generations; g++) {
-        live += genLiveBlocks(&generations[g]);
+
+    for (rc = RC_LIST; rc != NULL; rc = rc->link) {
+        live += rcLiveBlocks(rc);
     }
     return live;
 }
@@ -1115,6 +1143,9 @@ W_ calcLiveBlocks (void)
 extern W_ 
 calcNeeded (rtsBool force_major, memcount *blocks_needed)
 {
+    // TODO: This should probably not exist. We collect by RC, not gen!
+    return 2; // ==> does a major collection
+    /*
     W_ needed = 0, blocks;
     nat g, N;
     generation *gen;
@@ -1159,6 +1190,7 @@ calcNeeded (rtsBool force_major, memcount *blocks_needed)
         *blocks_needed = needed;
     }
     return N;
+    */
 }
 
 /* ----------------------------------------------------------------------------

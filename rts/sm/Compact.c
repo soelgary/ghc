@@ -933,6 +933,7 @@ update_bkwd_compact( generation *gen )
 void
 compact(StgClosure *static_objects)
 {
+    barf("RC does not support compaction yet");
     W_ n, g, blocks;
     generation *gen;
 
@@ -1002,7 +1003,8 @@ compact(StgClosure *static_objects)
         gen = &generations[g];
         debugTrace(DEBUG_gc, "update_fwd:  %d", g);
 
-        update_fwd(gen->blocks);
+        // TODO: FIX DIS
+        //update_fwd(gen->blocks);
         for (n = 0; n < n_capabilities; n++) {
             update_fwd(gc_threads[n]->gens[g].todo_bd);
             update_fwd(gc_threads[n]->gens[g].part_list);

@@ -229,7 +229,13 @@ new_gc_thread (nat n, gc_thread *t)
         // Hence, allocate a block for todo_bd manually:
         {
             bdescr *bd = allocBlock(); // no lock, locks aren't initialised yet
-            initBdescr(bd, ws->gen, ws->gen->to, t->r.rCurrentTSO.rc);
+
+            // NOTE: We dont necessarily want gc_threads to be tied to a given
+            // RC. For one, there are only N gc_threads, where N is the num
+            // capabilities. Which RC do they belong to at the start?? Ideally,
+            // we can have a gc_thread per RC, but Im scared of the performance
+            // and space costs of this. --GS
+            initBdescr(bd, ws->gen, ws->gen->to, NULL);
             bd->flags = BF_EVACUATED;
             bd->u.scan = bd->free = bd->start;
 
@@ -619,13 +625,16 @@ prepare_collected_gen (generation *gen)
     gen->threads = END_TSO_QUEUE;
 
     // deprecate the existing blocks
+    
+    // TODO: Need to do this for RCs!
+    /*
     gen->old_blocks   = gen->blocks;
     gen->n_old_blocks = gen->n_blocks;
     gen->blocks       = NULL;
     gen->n_blocks     = 0;
     gen->n_words      = 0;
     gen->live_estimate = 0;
-
+    */
     // initialise the large object queues.
     ASSERT(gen->scavenged_large_objects == NULL);
     ASSERT(gen->n_scavenged_large_blocks == 0);
@@ -755,6 +764,8 @@ prepare_uncollected_gen (generation *gen)
 static void
 collect_gct_blocks (void)
 {
+    // TODO: Need to collect gc_threads for RCs, not generations!
+    /*
     nat g;
     gen_workspace *ws;
     bdescr *bd, *prev;
@@ -789,6 +800,7 @@ collect_gct_blocks (void)
             RELEASE_SPIN_LOCK(&ws->gen->sync);
         }
     }
+    */
 }
 
 /* -----------------------------------------------------------------------------
@@ -882,6 +894,8 @@ mark_root(void *user USED_IF_THREADS, StgClosure **root)
 static void
 resize_generations (void)
 {
+    // TODO: I dont think this is even used...
+    /*
     nat g;
 
     if (major_gc && RtsFlags.GcFlags.generations > 1) {
@@ -971,6 +985,7 @@ resize_generations (void)
             generations[g].max_blocks = size;
         }
     }
+    */
 }
 
 /* -----------------------------------------------------------------------------
@@ -980,13 +995,15 @@ resize_generations (void)
 static void
 resize_nursery (void)
 {
+    // TODO: Do this per RC. Cannot resize them all at once though
+    /*
     const StgWord min_nursery =
       RtsFlags.GcFlags.minAllocAreaSize * (StgWord)n_capabilities;
 
     if (RtsFlags.GcFlags.generations == 1)
     {   // Two-space collector:
         W_ blocks;
-
+    */
         /* set up a new nursery.  Allocate a nursery size based on a
          * function of the amount of live data (by default a factor of 2)
          * Use the blocks from the old nursery if possible, freeing up any
@@ -1001,6 +1018,7 @@ resize_nursery (void)
          * performance we get from 3L bytes, reducing to the same
          * performance at 2L bytes.
          */
+      /*
         blocks = generations[0].n_blocks;
 
         if ( RtsFlags.GcFlags.maxHeapSize != 0 &&
@@ -1016,8 +1034,8 @@ resize_nursery (void)
                        RtsFlags.GcFlags.maxHeapSize, blocks, adjusted_blocks);
 
             pc_free = adjusted_blocks * 100 / RtsFlags.GcFlags.maxHeapSize;
-            if (pc_free < RtsFlags.GcFlags.pcFreeHeap) /* might even * be < 0 */
-            {
+            if (pc_free < RtsFlags.GcFlags.pcFreeHeap) *//* might even * be < 0 */
+            /*{
                 heapOverflow();
             }
             blocks = adjusted_blocks;
@@ -1033,18 +1051,18 @@ resize_nursery (void)
         resizeNurseries(blocks);
     }
     else  // Generational collector
-    {
+    {*/
         /*
          * If the user has given us a suggested heap size, adjust our
          * allocation area to make best use of the memory available.
-         */
+         *//*
         if (RtsFlags.GcFlags.heapSizeSuggestion)
         {
             long blocks;
             StgWord needed;
 
             calcNeeded(rtsFalse, &needed); // approx blocks needed at next GC
-
+            */
             /* Guess how much will be live in generation 0 step 0 next time.
              * A good approximation is obtained by finding the
              * percentage of g0 that was live at the last minor GC.
@@ -1054,12 +1072,13 @@ resize_nursery (void)
              * a small adjustment for estimated slop at the end of a block
              * (- 10 words).
              */
+             /*
             if (N == 0)
             {
                 g0_pcnt_kept = ((copied / (BLOCK_SIZE_W - 10)) * 100)
                     / countNurseryBlocks();
             }
-
+            */
             /* Estimate a size for the allocation area based on the
              * information available.  We might end up going slightly under
              * or over the suggested heap size, but we should be pretty
@@ -1072,6 +1091,7 @@ resize_nursery (void)
              * where 'needed' is the amount of memory needed at the next
              * collection for collecting all gens except g0.
              */
+             /*
             blocks =
                 (((long)RtsFlags.GcFlags.heapSizeSuggestion - (long)needed) * 100) /
                 (100 + (long)g0_pcnt_kept);
@@ -1091,6 +1111,7 @@ resize_nursery (void)
             //barf("Resize the damn nurseries");
         }
     }
+    */
 }
 
 /* -----------------------------------------------------------------------------

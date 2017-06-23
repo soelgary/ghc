@@ -1665,6 +1665,7 @@ scavenge_capability_mut_lists (Capability *cap)
 {
     nat g;
 
+    ResourceContainer *rc = cap->r.rCurrentTSO->rc;
     /* Mutable lists from each generation > N
      * we want to *scavenge* these roots, not evacuate them: they're not
      * going to move in this GC.
@@ -1672,9 +1673,9 @@ scavenge_capability_mut_lists (Capability *cap)
      * namely to reduce the likelihood of spurious old->new pointers.
      */
     for (g = RtsFlags.GcFlags.generations-1; g > N; g--) {
-        scavenge_mutable_list(cap->saved_mut_lists[g], &generations[g]);
-        freeChain_sync(cap->saved_mut_lists[g]);
-        cap->saved_mut_lists[g] = NULL;
+        scavenge_mutable_list(rc->saved_mut_lists[g], &generations[g]);
+        freeChain_sync(rc->saved_mut_lists[g]);
+        rc->saved_mut_lists[g] = NULL;
     }
 }
 

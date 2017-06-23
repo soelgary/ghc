@@ -233,8 +233,9 @@ LdvCensusForDead( nat N )
     } else {
         processNurseryForDead();
         for (g = 0; g <= N; g++) {
-            processHeapForDead(generations[g].old_blocks);
-            processChainForDead(generations[g].large_objects);
+            // TODO: This needs to take an RC! We cant clean up an entire gen!
+            //processHeapForDead(generations[g].old_blocks);
+            //processChainForDead(generations[g].large_objects);
         }
     }
 }

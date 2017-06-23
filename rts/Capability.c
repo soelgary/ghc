@@ -236,8 +236,6 @@ popReturningTask (Capability *cap)
 static void
 initCapability( Capability *cap, nat i )
 {
-    nat g;
-
     cap->no = i;
     cap->in_haskell        = rtsFalse;
     cap->idle              = 0;
