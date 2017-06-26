@@ -118,6 +118,8 @@ createThread(Capability *cap, W_ size)
     tso->stackobj       = stack;
     tso->tot_stack_size = stack->stack_size;
 
+    tso->rc = rc;
+
     ASSIGN_Int64((W_*)&(tso->alloc_limit), 0);
 
     tso->trec = NO_TREC;

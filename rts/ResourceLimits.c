@@ -11,7 +11,7 @@
 
 ResourceContainer *RC_MAIN = NULL;
 ResourceContainer *RC_LIST = NULL;
-int RC_COUNT = 0;
+nat RC_COUNT = 0;
 
 bdescr *
 allocGroupFor(W_ n, ResourceContainer *rc)
@@ -128,6 +128,8 @@ newRC(ResourceContainer *parent, nat max_blocks)
   if(parent != NULL) {
     addChild(parent, rc);
   }
+
+  rc->id = RC_COUNT;
 
   RC_LIST = rc;
   RC_COUNT++;

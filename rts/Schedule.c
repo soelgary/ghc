@@ -171,11 +171,14 @@ schedule (Capability *initialCapability, Task *task)
   StgThreadReturnCode ret;
   nat prev_what_next;
   rtsBool ready_to_gc;
+  ResourceContainer *rc;
+
 #if defined(THREADED_RTS)
   rtsBool first = rtsTrue;
 #endif
 
   cap = initialCapability;
+
 
   // Pre-condition: this task owns initialCapability.
   // The sched_mutex is *NOT* held
@@ -306,6 +309,8 @@ schedule (Capability *initialCapability, Task *task)
     // Get a thread to run
     //
     t = popRunQueue(cap);
+
+    rc = t->rc;
 
     // Sanity check the thread we're about to run.  This can be
     // expensive if there is lots of thread switching going on...
@@ -470,6 +475,7 @@ run_thread:
     // The TSO might have moved, eg. if it re-entered the RTS and a GC
     // happened.  So find the new location:
     t = cap->r.rCurrentTSO;
+    t->rc = rc;
 
     // cap->r.rCurrentTSO is charged for calls to allocate(), so we
     // don't want it set when not running a Haskell thread.
@@ -1166,11 +1172,14 @@ scheduleHandleHeapOverflow( Capability *cap, StgTSO *t )
 
     // Otherwise, we just ran out of space in the current nursery.
     // Grab another nursery if we can.
-    /*if (getNewNursery(cap)) {
+    if (addBlockToNursery(t->rc)) {
         debugTrace(DEBUG_sched, "thread %ld got a new nursery", t->id);
+        cap->r.rCurrentNursery = t->rc->nursery->blocks;
+        cap->r.rNursery = t->rc->nursery;
+        cap->r.rCurrentAlloc = NULL;
         return rtsFalse;
-    }*/
-    barf("Cannot get a new nursery for greedy capabilities");
+    }
+    //barf("Cannot get a new nursery for greedy capabilities");
 
     return rtsTrue;
     /* actual GC is done at the end of the while loop in schedule() */

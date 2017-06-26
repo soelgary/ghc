@@ -520,14 +520,14 @@ countNurseryBlocks (void)
     return blocks;
 }
 
-static void
+static int
 resizeNursery (nursery *nursery, W_ blocks)
 {
   bdescr *bd;
   W_ nursery_blocks;
 
   nursery_blocks = nursery->n_blocks;
-  if (nursery_blocks == blocks) return;
+  if (nursery_blocks == blocks) return 0;
 
   if (nursery_blocks < blocks) {
       debugTrace(DEBUG_gc, "increasing size of nursery to %d blocks", 
@@ -558,6 +558,7 @@ resizeNursery (nursery *nursery, W_ blocks)
   
   nursery->n_blocks = blocks;
   ASSERT(countBlocks(nursery->blocks) == nursery->n_blocks);
+  return blocks - nursery_blocks;
 }
 
 // 
@@ -596,6 +597,40 @@ resizeNurseries (W_ blocks)
     // If there are multiple nurseries, then we just divide the number
     // of available blocks between them.
     resizeNurseriesEach(blocks / n_nurseries);
+}
+
+rtsBool
+addBlockToNursery (ResourceContainer *rc)
+{
+    nursery *nursery;
+    W_ blocks;
+
+    nursery = rc->nursery;
+    blocks = rc->nursery->n_blocks;
+
+    int num_allocated = resizeNursery(nursery, blocks+1);
+    rc->used_blocks = rc->used_blocks + num_allocated;
+    if (rc->used_blocks > rc->max_blocks && rc->max_blocks != 0) {
+        barf("SHIT.. Too many blocks");
+    }
+
+    return rtsTrue;
+}
+
+rtsBool
+getNewNursery (ResourceContainer *rc)
+{
+    StgWord i;
+    for(;;) {
+        i = next_nursery;
+        if (i >= n_nurseries) {
+            return rtsFalse;
+        }
+        if (cas(&next_nursery, i, i+1) == i) {
+            // TODO: Assign nursery to RC here
+            return rtsTrue;
+        }
+    }
 }
 
 /*
