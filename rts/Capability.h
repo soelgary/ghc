@@ -381,7 +381,7 @@ recordMutableCap (StgClosure *p, Capability *cap, nat gen)
     } else {
         rc = cap->r.rCurrentTSO->rc;
     }
-    ASSERT(RC != NULL);
+    ASSERT(rc != NULL);
     // We must own this Capability in order to modify its mutable list.
     //    ASSERT(cap->running_task == myTask());
     // NO: assertion is violated by performPendingThrowTos()
