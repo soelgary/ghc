@@ -370,6 +370,8 @@ INLINE_HEADER rtsBool emptyInbox(Capability *cap);
 EXTERN_INLINE void
 recordMutableCap (StgClosure *p, Capability *cap, nat gen)
 {
+    // TODO: RC is getting optimized away. This should not happen
+
     bdescr *bd;
 
     ResourceContainer *rc;
