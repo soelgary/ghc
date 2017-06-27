@@ -9,10 +9,6 @@
 #define RC_NORMAL       0
 #define RC_KILLED       1
 
-extern ResourceContainer *RC_MAIN;
-extern ResourceContainer *RC_LIST;
-extern nat RC_COUNT;
-
 bdescr *allocGroupFor(W_ n, ResourceContainer *rc);
 bdescr *allocBlockFor(ResourceContainer *rc);
 

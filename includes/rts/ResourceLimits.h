@@ -19,6 +19,6 @@ typedef struct ResourceContainer_ ResourceContainer;
 
 extern ResourceContainer *RC_MAIN;
 extern ResourceContainer *RC_LIST;
-extern int RC_COUNT;
+extern nat RC_COUNT;
 
 #endif /* RTS_RESOURCE_LIMITS_H */

@@ -74,7 +74,8 @@ typedef struct ResourceContainer_ {
   struct ResourceContainer_ *link;
   struct ResourceContainer_ *parent;
   RCChildren *children;
-
+  nat id;
+    
   memcount max_blocks;
   memcount used_blocks;
 
