@@ -12,7 +12,7 @@
 bdescr *allocGroupFor(W_ n, ResourceContainer *rc);
 bdescr *allocBlockFor(ResourceContainer *rc);
 
-StgRC *newRC(ResourceContainer *parent, nat max_blocks);
+ResourceContainer *newRC(ResourceContainer *parent, nat max_blocks);
 void killRC(ResourceContainer *rc);
 
 void initRC(void);

@@ -60,7 +60,7 @@ addChild(ResourceContainer *parent, ResourceContainer *child)
   parent->children = childLink;
 }
 
-StgRC *
+ResourceContainer *
 newRC(ResourceContainer *parent, nat max_blocks)
 {
   // TODO: Think about sane defaults for number of children. Is it a constant
@@ -68,10 +68,10 @@ newRC(ResourceContainer *parent, nat max_blocks)
   // We need this becuase there are two separate memory partitions: for haskell
   // and the runtime system. The RTS has "unlimited" size. The haskell does not.
 
-  StgRC *stgRC = stgMallocBytes(sizeof(StgRC), "newStgRC");
-  SET_HDR(stgRC, &stg_RC_info, CCS_SYSTEM);
+  //StgRC *stgRC = stgMallocBytes(sizeof(StgRC), "newStgRC");
+  //SET_HDR(stgRC, &stg_RC_info, CCS_SYSTEM);
   ResourceContainer *rc = stgMallocBytes(sizeof(ResourceContainer), "newRC");
-  stgRC->rc = rc;
+  //stgRC->rc = rc;
   rc->status = RC_NORMAL;
   rc->max_blocks = max_blocks;
   rc->used_blocks = 0;
@@ -133,7 +133,7 @@ newRC(ResourceContainer *parent, nat max_blocks)
 
   RC_LIST = rc;
   RC_COUNT++;
-  return stgRC;
+  return rc;
 }
 
 void
@@ -141,8 +141,8 @@ initRC()
 {
 
   // Set up Resource Containers
-  StgRC *stgRC = newRC(NULL, 0);
-  RC_MAIN = stgRC->rc;
+  ResourceContainer *rc = newRC(NULL, 0);
+  RC_MAIN = rc;
 
   nat i;
 

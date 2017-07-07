@@ -1092,6 +1092,7 @@ schedulePostRunThread (Capability *cap, StgTSO *t)
 static rtsBool
 scheduleHandleHeapOverflow( Capability *cap, StgTSO *t )
 {
+    debugTrace(DEBUG_sched, "Heap overflow");
     if (cap->r.rHpLim == NULL || cap->context_switch) {
         // Sometimes we miss a context switch, e.g. when calling
         // primitives in a tight loop, MAYBE_GC() doesn't check the
@@ -1167,6 +1168,7 @@ scheduleHandleHeapOverflow( Capability *cap, StgTSO *t )
     // if we got here because we exceeded large_alloc_lim, then
     // proceed straight to GC.
     if (g0->n_new_large_words >= large_alloc_lim) {
+        barf("Need to actually GC here... Large alloc limit exceeded.");
         return rtsTrue;
     }
 
@@ -1180,7 +1182,7 @@ scheduleHandleHeapOverflow( Capability *cap, StgTSO *t )
         return rtsFalse;
     }
     //barf("Cannot get a new nursery for greedy capabilities");
-
+    barf("Need to actually GC here...");
     return rtsTrue;
     /* actual GC is done at the end of the while loop in schedule() */
 }
