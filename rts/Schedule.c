@@ -1167,18 +1167,15 @@ scheduleHandleHeapOverflow( Capability *cap, StgTSO *t )
 
     // if we got here because we exceeded large_alloc_lim, then
     // proceed straight to GC.
-    if (g0->n_new_large_words >= large_alloc_lim) {
+    if (t->rc->n_new_large_words >= large_alloc_lim) {
         barf("Need to actually GC here... Large alloc limit exceeded.");
         return rtsTrue;
     }
 
     // Otherwise, we just ran out of space in the current nursery.
     // Grab another nursery if we can.
-    if (addBlockToNursery(t->rc)) {
-        debugTrace(DEBUG_sched, "thread %ld got a new nursery", t->id);
-        cap->r.rCurrentNursery = t->rc->nursery->blocks;
-        cap->r.rNursery = t->rc->nursery;
-        cap->r.rCurrentAlloc = NULL;
+    if (addBlockToNursery(t->rc, cap->r.rCurrentNursery)) {
+        debugTrace(DEBUG_sched, "thread %ld got a new block", t->id);
         return rtsFalse;
     }
     //barf("Cannot get a new nursery for greedy capabilities");

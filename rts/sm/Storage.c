@@ -532,7 +532,8 @@ resizeNursery (nursery *nursery, W_ blocks)
   if (nursery_blocks < blocks) {
       debugTrace(DEBUG_gc, "increasing size of nursery to %d blocks", 
                  blocks);
-    nursery->blocks = allocNursery(nursery->blocks, blocks-nursery_blocks, nursery->rc);
+    nursery->blocks = allocNursery(nursery->blocks, 1, nursery->rc);
+    barf("TODO: Dont use this!");
   } 
   else {
     bdescr *next_bd;
@@ -557,6 +558,7 @@ resizeNursery (nursery *nursery, W_ blocks)
   }
   
   nursery->n_blocks = blocks;
+
   ASSERT(countBlocks(nursery->blocks) == nursery->n_blocks);
   return blocks - nursery_blocks;
 }
@@ -600,15 +602,28 @@ resizeNurseries (W_ blocks)
 }
 
 rtsBool
-addBlockToNursery (ResourceContainer *rc)
+addBlockToNursery (ResourceContainer *rc, bdescr *currentNursery)
 {
     nursery *nursery;
     W_ blocks;
+    bdescr *bd;
 
     nursery = rc->nursery;
     blocks = rc->nursery->n_blocks;
 
-    int num_allocated = resizeNursery(nursery, blocks+1);
+    //int num_allocated = resizeNursery(nursery, blocks+1);
+    int num_allocated = 1;
+
+    W_ n = stg_min(BLOCKS_PER_MBLOCK, blocks+1);
+    bd = allocLargeChunk(1, n);
+    bd->rc = nursery->rc;
+    initBdescr(bd, g0, g0, nursery->rc);
+    bd->blocks = 1;
+    bd->flags = 0;
+    currentNursery->link = bd;
+    bd->u.back = currentNursery;
+    
+    
     rc->used_blocks = rc->used_blocks + num_allocated;
     if (rc->used_blocks > rc->max_blocks && rc->max_blocks != 0) {
         barf("SHIT.. Too many blocks");

@@ -86,7 +86,7 @@ void     resizeNurseriesFixed ( void );
 W_       countNurseryBlocks   ( void );
 //  rtsBool  getNewNursery        ( Capability *cap );
 bdescr *allocNursery(bdescr *tail, W_ blocks, ResourceContainer *rc);
-rtsBool addBlockToNursery(ResourceContainer *rc);
+rtsBool addBlockToNursery(ResourceContainer *rc, bdescr *currentNursery);
 
 /* -----------------------------------------------------------------------------
    Allocation accounting

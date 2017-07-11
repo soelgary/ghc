@@ -53,7 +53,7 @@ first mv ref root =  replicateM_ (len *2) (b >> a >> bump mv)
         b = mapM_ (pushMsg root) [0..min] 
   
 --second :: IORef [String] -> Chann -> IO ()
-second mv ref root = const (bump mv)  =<< const (replicateM_ len a) =<< replicateM_ 100 (b >> a)
+second mv ref root = const (bump mv)  =<< const (replicateM_ len a) =<< replicateM_ 500 (b >> a)
   where a = customTrace ref "LLLLLL"
         b = mapM_ (pushMsg root) [0..1]
 

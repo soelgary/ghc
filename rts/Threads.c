@@ -65,7 +65,7 @@ createThread(Capability *cap, W_ size)
     if (cap->r.rCurrentTSO == NULL) {
         rc = RC_MAIN;
     } else {
-        rc = newRC(cap->r.rCurrentTSO->rc, 0)->rc;
+        rc = newRC(cap->r.rCurrentTSO->rc, 0);
     }
 
     //bdescr *savedCurrentAlloc = cap->r.rCurrentAlloc;
