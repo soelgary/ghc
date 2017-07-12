@@ -64,8 +64,10 @@ createThread(Capability *cap, W_ size)
 
     if (cap->r.rCurrentTSO == NULL) {
         rc = RC_MAIN;
+        debugTrace(DEBUG_sched, "Parent is RC_MAIN");
     } else {
-        rc = newRC(cap->r.rCurrentTSO->rc, 0);
+        rc = newRC(cap->r.rCurrentTSO->rc);
+        debugTrace(DEBUG_sched, "Parent is not RC_MAIN");
     }
 
     //bdescr *savedCurrentAlloc = cap->r.rCurrentAlloc;

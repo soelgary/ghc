@@ -61,7 +61,7 @@ addChild(ResourceContainer *parent, ResourceContainer *child)
 }
 
 ResourceContainer *
-newRC(ResourceContainer *parent, nat max_blocks)
+newRC(ResourceContainer *parent)
 {
   // TODO: Think about sane defaults for number of children. Is it a constant
   // number? Is it based on the number of blocks?
@@ -73,7 +73,6 @@ newRC(ResourceContainer *parent, nat max_blocks)
   ResourceContainer *rc = stgMallocBytes(sizeof(ResourceContainer), "newRC");
   //stgRC->rc = rc;
   rc->status = RC_NORMAL;
-  rc->max_blocks = max_blocks;
   rc->used_blocks = 0;
   rc->block_record = NULL;
 #ifdef DEBUG
@@ -81,19 +80,29 @@ newRC(ResourceContainer *parent, nat max_blocks)
 #endif
   rc->pinned_object_block = NULL;
 
-  memcount n_blocks;
+  memcount max_blocks;
 
-  if (RtsFlags.GcFlags.nurseryChunkSize) {
-      n_blocks = RtsFlags.GcFlags.nurseryChunkSize;
+  if (parent != NULL) {
+    if (parent->max_blocks - parent->n_blocks > 1) {
+      max_blocks = parent->max_blocks / 2; // TODO: Need to take unused blocks
+      debugTrace(DEBUG_gc, "Resource container is created from a parent with %d blocks. This RC is stealing %d", parent->max_blocks, max_blocks);
+      parent->max_blocks = parent->max_blocks - max_blocks;
+    } else {
+      barf("Cannot create a resource container when the parent has %d free blocks", parent->max_blocks - parent->n_blocks);
+    }
+  } else if (RtsFlags.GcFlags.maxHeapSize) {
+    max_blocks = RtsFlags.GcFlags.maxHeapSize; // Divide by the size of a block
+    debugTrace(DEBUG_gc, "Resource container does not have a parent. Setting number of blocks to be %d", max_blocks);
   } else {
-      n_blocks = RtsFlags.GcFlags.minAllocAreaSize;
+      barf("Unknown heap size");
   }
 
   nursery *nurse = stgMallocBytes(sizeof(struct nursery_), "rcCreateNursery");
-  bdescr *bd = allocNursery(NULL, n_blocks, rc);
+  memcount initialNurserySize = 1;
+  bdescr *bd = allocNursery(NULL, initialNurserySize, rc);
   
   nurse->blocks = bd;
-  nurse->n_blocks = n_blocks; //TODO: Decrement used blocks by n_blocks?
+  nurse->n_blocks = 0; //TODO: Decrement used blocks by n_blocks?
   nurse->rc = rc;
 
   rc->nursery = nurse;
@@ -110,6 +119,7 @@ newRC(ResourceContainer *parent, nat max_blocks)
   rc->blocks = NULL;
   rc->n_blocks = 0;
   rc->n_words = 0;
+  rc->max_blocks = max_blocks;
 
   rc->mut_lists  = stgMallocBytes(sizeof(bdescr *) *
                                      RtsFlags.GcFlags.generations,
@@ -141,7 +151,7 @@ initRC()
 {
 
   // Set up Resource Containers
-  ResourceContainer *rc = newRC(NULL, 0);
+  ResourceContainer *rc = newRC(NULL);
   RC_MAIN = rc;
 
   nat i;

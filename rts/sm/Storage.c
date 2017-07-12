@@ -626,7 +626,9 @@ addBlockToNursery (ResourceContainer *rc, bdescr *currentNursery)
     
     rc->used_blocks = rc->used_blocks + num_allocated;
     if (rc->used_blocks > rc->max_blocks && rc->max_blocks != 0) {
-        barf("SHIT.. Too many blocks");
+        // TODO: This shouldnt barf. The thread should probably die and the
+        //       resources should possibly go back to the parent
+        barf("Too many blocks.. Time to scavenge the nursery");
     }
 
     return rtsTrue;
@@ -1121,7 +1123,7 @@ W_ rcLiveWords (ResourceContainer *rc)
 W_ genLiveBlocks (generation *gen)
 {
     //return gen->n_blocks + gen->n_large_blocks;
-    barf("genLiveWords no longer exists. Use rcLiveWords instead");
+    barf("genLiveBlocks no longer exists. Use rcLiveBlocks instead");
 }
 
 W_ rcLiveBlocks (ResourceContainer *rc)
@@ -1132,24 +1134,26 @@ W_ rcLiveBlocks (ResourceContainer *rc)
 W_ gcThreadLiveWords (nat i, nat g)
 {
     W_ a, b, c;
-
-    a = countOccupied(gc_threads[i]->gens[g].todo_bd);
-    b = gc_threads[i]->gens[g].n_part_words;
-    c = gc_threads[i]->gens[g].n_scavd_words;
+    // TODO: Fix these once the GC is done
+    //a = countOccupied(gc_threads[i]->gens[g].todo_bd);
+    //b = gc_threads[i]->gens[g].n_part_words;
+    //c = gc_threads[i]->gens[g].n_scavd_words;
 
 //    debugBelch("cap %d, g%d, %ld %ld %ld\n", i, g, a, b, c);
-    return a + b + c;
+    //return a + b + c;
+    return 0;
 }
 
 W_ gcThreadLiveBlocks (nat i, nat g)
 {
     W_ blocks;
+    // TODO: Fix these once the GC is done
+    //blocks  = countBlocks(gc_threads[i]->gens[g].todo_bd);
+    //blocks += gc_threads[i]->gens[g].n_part_blocks;
+    //blocks += gc_threads[i]->gens[g].n_scavd_blocks;
 
-    blocks  = countBlocks(gc_threads[i]->gens[g].todo_bd);
-    blocks += gc_threads[i]->gens[g].n_part_blocks;
-    blocks += gc_threads[i]->gens[g].n_scavd_blocks;
-
-    return blocks;
+    //return blocks;
+    return 0;
 }
 
 // Return an accurate count of the live data in the heap, excluding
