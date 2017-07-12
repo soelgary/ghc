@@ -1,6 +1,6 @@
 
--- Run this with +RTS -MXXX and it should fail
--- Run this with +RTS -MXXX and it should pass
+-- Run this with +RTS -M50000 and it should fail
+-- Run this with +RTS -M800000 and it should pass
 -- This tests that the parent gives up its blocks correctly
 
 import Control.Concurrent (forkIO, threadDelay)
