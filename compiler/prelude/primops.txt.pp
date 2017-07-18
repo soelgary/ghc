@@ -2265,6 +2265,12 @@ primtype ThreadId#
         type, whose (unique) value is returned by {\tt myThreadId\#}.  The
         other operations can be omitted.)}
 
+primop SetParentOp "setParent#" GenPrimOp
+  ThreadId# -> State# RealWorld -> State# RealWorld
+  with
+  has_side_effects = True
+  out_of_line      = True
+
 primop  ForkOp "fork#" GenPrimOp
    a -> State# RealWorld -> (# State# RealWorld, ThreadId# #)
    with

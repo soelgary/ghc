@@ -100,6 +100,8 @@ createThread(Capability *cap, W_ size)
     stack->dirty        = 1;
 
     tso = (StgTSO *)allocate(cap, sizeofW(StgTSO));
+    rc->ownerTSO = tso;
+    rc->parentTSO = cap->r.rCurrentTSO;
     TICK_ALLOC_TSO();
     SET_HDR(tso, &stg_TSO_info, CCS_SYSTEM);
 

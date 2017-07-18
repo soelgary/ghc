@@ -19,6 +19,8 @@ void initRC(void);
 
 W_ countRCBlocks(ResourceContainer *rc);
 
+void setThreadParent(Capability *cap, StgTSO *parent);
+
 #include "EndPrivate.h"
 
 #endif /* RESOURCE_LIMITS_H */

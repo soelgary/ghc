@@ -70,12 +70,16 @@ typedef struct RCChildren_ {
 
 typedef struct ResourceContainer_ {
 
+  StgTSO *ownerTSO; // the thread that allocates into this RC. Should not ever change
+  StgTSO *parentTSO; // the thread that will reclaim this RC when owner dies. This
+                  // can change dynamically
+
   // All the pointers
   struct ResourceContainer_ *link;
   struct ResourceContainer_ *parent;
   RCChildren *children;
   nat id;
-    
+
   memcount max_blocks;
   memcount used_blocks;
 

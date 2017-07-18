@@ -411,6 +411,7 @@ RTS_FUN_DECL(stg_deRefStablePtrzh);
 
 RTS_FUN_DECL(stg_forkzh);
 RTS_FUN_DECL(stg_forkOnzh);
+RTS_FUN_DECL(stg_setParentzh);
 RTS_FUN_DECL(stg_yieldzh);
 RTS_FUN_DECL(stg_killMyself);
 RTS_FUN_DECL(stg_killThreadzh);

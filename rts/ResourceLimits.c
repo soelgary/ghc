@@ -194,3 +194,13 @@ countRCBlocks(ResourceContainer *rc)
 
   return numBlocks;
 }
+
+void
+setThreadParent(Capability *cap, StgTSO *parent)
+{
+  ResourceContainer *rc;
+
+  rc = cap->r.rCurrentTSO->rc;
+  rc->parentTSO = parent;
+  debugTrace(DEBUG_gc, "Set the current thread (%d) parent to %d", cap->r.rCurrentTSO->id, parent->id);
+}

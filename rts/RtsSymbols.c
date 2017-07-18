@@ -546,6 +546,7 @@
       SymI_HasProto(dirty_TVAR)                                         \
       SymI_HasProto(stg_forkzh)                                         \
       SymI_HasProto(stg_forkOnzh)                                       \
+      SymI_HasProto(stg_setParentzh)                                    \
       SymI_HasProto(forkProcess)                                        \
       SymI_HasProto(forkOS_createThread)                                \
       SymI_HasProto(freeHaskellFunctionPtr)                             \

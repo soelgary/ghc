@@ -880,6 +880,13 @@ again: MAYBE_GC(again);
     return (threadid);
 }
 
+stg_setParentzh (gcptr threadid)
+{
+    W_ p;
+    (p) = ccall setThreadParent(MyCapability() "ptr", threadid "ptr");
+    return (p);
+}
+
 stg_yieldzh ()
 {
     // when we yield to the scheduler, we have to tell it to put the
