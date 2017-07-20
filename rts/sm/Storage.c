@@ -746,18 +746,19 @@ allocate (Capability *cap, W_ n)
             // just exit.
             stg_exit(EXIT_HEAPOVERFLOW);
         }
-
-        ACQUIRE_SM_LOCK
-        bd = allocGroup(req_blocks);
-        dbl_link_onto(bd, &rc->large_objects);
-        rc->n_large_blocks += bd->blocks; // might be larger than req_blocks
-        rc->n_new_large_words += n;
-        RELEASE_SM_LOCK;
-        initBdescr(bd, g0, g0, rc);
-        bd->flags = BF_LARGE;
-        bd->free = bd->start + n;
-        cap->total_allocated += n;
-        return bd->start;
+        else {
+            ACQUIRE_SM_LOCK
+            bd = allocGroup(req_blocks);
+            dbl_link_onto(bd, &rc->large_objects);
+            rc->n_large_blocks += bd->blocks; // might be larger than req_blocks
+            rc->n_new_large_words += n;
+            RELEASE_SM_LOCK;
+            initBdescr(bd, g0, g0, rc);
+            bd->flags = BF_LARGE;
+            bd->free = bd->start + n;
+            cap->total_allocated += n;
+            return bd->start;
+        }
     }
 
     /* small allocation (<LARGE_OBJECT_THRESHOLD) */
@@ -772,7 +773,8 @@ allocate (Capability *cap, W_ n)
         // nursery:
         bd = cap->r.rCurrentNursery->link;
         
-        if (bd == NULL) {
+        if (bd == NULL && rc->free_blocks == NULL) {
+            debugTrace(DEBUG_gc, "Allocating a fresh block");
             // The nursery is empty: allocate a fresh block (we can't
             // fail here).
             ACQUIRE_SM_LOCK;
@@ -784,6 +786,14 @@ allocate (Capability *cap, W_ n)
             // If we had to allocate a new block, then we'll GC
             // pretty quickly now, because MAYBE_GC() will
             // notice that CurrentNursery->link is NULL.
+        } else if (bd == NULL && rc->free_blocks != NULL) {
+            debugTrace(DEBUG_gc, "Stealing a block from the free list");
+            bd = rc->free_blocks;
+            rc->free_blocks = bd->link;
+            cap->r.rNursery->n_blocks++;
+            initBdescr(bd,g0,g0,rc);
+            bd->flags = 0;
+            bd->link = NULL;
         } else {
             newNurseryBlock(bd);
             // we have a block in the nursery: take it and put

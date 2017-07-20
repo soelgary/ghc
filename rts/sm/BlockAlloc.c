@@ -703,12 +703,12 @@ countAllocdBlocks(bdescr *bd)
     return n;
 }
 
-void returnMemoryToOS(nat n /* megablocks */)
+void returnMemoryToOS_safe(nat n, bdescr *to_free)
 {
-    static bdescr *bd;
+    bdescr *bd;
     StgWord size;
 
-    bd = free_mblock_list;
+    bd = to_free;
     while ((n > 0) && (bd != NULL)) {
         size = BLOCKS_TO_MBLOCKS(bd->blocks);
         if (size > n) {
@@ -726,7 +726,7 @@ void returnMemoryToOS(nat n /* megablocks */)
             freeMBlocks(freeAddr, size);
         }
     }
-    free_mblock_list = bd;
+    to_free = bd;
 
     // Ask the OS to release any address space portion
     // that was associated with the just released MBlocks
@@ -743,6 +743,14 @@ void returnMemoryToOS(nat n /* megablocks */)
                        n);
         }
     );
+}
+
+void returnMemoryToOS(nat n /* megablocks */)
+{
+    static bdescr *bd;
+
+    bd = free_mblock_list;
+    return returnMemoryToOS_safe(n,bd);
 }
 
 /* -----------------------------------------------------------------------------

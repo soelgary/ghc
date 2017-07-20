@@ -1263,6 +1263,7 @@ scheduleHandleThreadBlocked( StgTSO *t
 static rtsBool
 scheduleHandleThreadFinished (Capability *cap STG_UNUSED, Task *task, StgTSO *t)
 {
+    debugTrace(DEBUG_gc, "Finishing %p", t);
     /* Need to check whether this was a main thread, and if so,
      * return with the return value.
      *
@@ -1295,6 +1296,7 @@ scheduleHandleThreadFinished (Capability *cap STG_UNUSED, Task *task, StgTSO *t)
               // this thread and its return value (it gets dropped from the
               // step->threads list so there's no other way to find it).
               appendToRunQueue(cap,t);
+              releaseSpaceAndTime(t->rc);
               return rtsFalse;
 #else
               // this cannot happen in the threaded RTS, because a
@@ -1338,10 +1340,10 @@ scheduleHandleThreadFinished (Capability *cap STG_UNUSED, Task *task, StgTSO *t)
           // tso->bound->tso which lead to a deadlock.
           t->bound = NULL;
           task->incall->tso = NULL;
-
+          releaseSpaceAndTime(t->rc);
           return rtsTrue; // tells schedule() to return
       }
-
+      releaseSpaceAndTime(t->rc);
       return rtsFalse;
 }
 

@@ -62,11 +62,20 @@ createThread(Capability *cap, W_ size)
 
     ResourceContainer *rc;
 
+    ResourceContainer *savedRC;
+    bdescr *savedCurrentAlloc;
+
     if (cap->r.rCurrentTSO == NULL) {
         rc = RC_MAIN;
+        savedRC = RC_MAIN;
         debugTrace(DEBUG_sched, "Parent is RC_MAIN");
     } else {
         rc = newRC(cap->r.rCurrentTSO->rc);
+        savedRC = cap->r.rCurrentTSO->rc;
+        savedCurrentAlloc = cap->r.rCurrentAlloc;
+        // We want to charge the new thread for the allocation
+        cap->r.rCurrentAlloc = rc->currentAlloc;
+        cap->r.rCurrentTSO->rc = rc;
         debugTrace(DEBUG_sched, "Parent is not RC_MAIN");
     }
 
@@ -91,6 +100,7 @@ createThread(Capability *cap, W_ size)
      * threads back-to-back they'll fit nicely in a block.  It's a bit
      * of a benchmark hack, but it doesn't do any harm.
      */
+
     stack_size = round_to_mblocks(size - sizeofW(StgTSO));
     stack = (StgStack *)allocate(cap, stack_size);
     TICK_ALLOC_STACK(stack_size);
@@ -147,8 +157,6 @@ createThread(Capability *cap, W_ size)
 
     // ToDo: report the stack size in the event?
     traceEventCreateThread(cap, tso);
-
-    //cap->r.rCurrentAlloc = savedCurrentAlloc;
 
     return tso;
 }

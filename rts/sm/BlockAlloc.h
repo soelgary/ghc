@@ -18,6 +18,7 @@ bdescr *allocLargeChunk (W_ min, W_ max);
 extern W_ countBlocks       (bdescr *bd);
 extern W_ countAllocdBlocks (bdescr *bd);
 extern void returnMemoryToOS(nat n);
+extern void returnMemoryToOS_safe(nat n, bdescr *bd);
 
 W_ neededBlocks(W_ n);
 

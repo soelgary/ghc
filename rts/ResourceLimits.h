@@ -21,6 +21,9 @@ W_ countRCBlocks(ResourceContainer *rc);
 
 void setThreadParent(Capability *cap, StgTSO *parent);
 
+void releaseSpaceAndTime(ResourceContainer *rc);
+//void removeTSOFromSleepingQueue(ResourceContainer *rc, StgTSO *sleeping_queue);
+
 #include "EndPrivate.h"
 
 #endif /* RESOURCE_LIMITS_H */

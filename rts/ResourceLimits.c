@@ -13,6 +13,9 @@ ResourceContainer *RC_MAIN = NULL;
 ResourceContainer *RC_LIST = NULL;
 nat RC_COUNT = 0;
 
+nat unreclaimable_count = 10;
+nat min_reclaimable_count = 1;
+
 bdescr *
 allocGroupFor(W_ n, ResourceContainer *rc)
 {
@@ -83,7 +86,7 @@ newRC(ResourceContainer *parent)
   memcount max_blocks;
 
   if (parent != NULL) {
-    if (parent->max_blocks - parent->n_blocks > 1) {
+    if (parent->max_blocks - parent->n_blocks > unreclaimable_count + min_reclaimable_count) {
       max_blocks = parent->max_blocks / 2; // TODO: Need to take unused blocks
       debugTrace(DEBUG_gc, "Resource container is created from a parent with %d blocks. This RC is stealing %d", parent->max_blocks, max_blocks);
       parent->max_blocks = parent->max_blocks - max_blocks;
@@ -101,6 +104,8 @@ newRC(ResourceContainer *parent)
   memcount initialNurserySize = 1;
   bdescr *bd = allocNursery(NULL, initialNurserySize, rc);
   
+  rc->isDead = rtsFalse;
+
   nurse->blocks = bd;
   nurse->n_blocks = 0; //TODO: Decrement used blocks by n_blocks?
   nurse->rc = rc;
@@ -120,6 +125,9 @@ newRC(ResourceContainer *parent)
   rc->n_blocks = 0;
   rc->n_words = 0;
   rc->max_blocks = max_blocks;
+
+  rc->parent = parent;
+  rc->free_blocks = NULL;
 
   rc->mut_lists  = stgMallocBytes(sizeof(bdescr *) *
                                      RtsFlags.GcFlags.generations,
@@ -203,4 +211,59 @@ setThreadParent(Capability *cap, StgTSO *parent)
   rc = cap->r.rCurrentTSO->rc;
   rc->parentTSO = parent;
   debugTrace(DEBUG_gc, "Set the current thread (%d) parent to %d", cap->r.rCurrentTSO->id, parent->id);
+}
+
+void appendToFreeList(ResourceContainer *rc, bdescr *head)
+{
+  if (rc != NULL) {
+    bdescr *tail = head;
+    while(tail != NULL) {
+      if (tail->link == NULL) {
+        tail->link = rc->free_blocks;
+        break;
+      }
+      tail = tail->link;
+    }
+    rc->free_blocks = head;
+  }
+}
+
+void
+releaseSpaceAndTime(ResourceContainer *rc)
+{
+  debugTrace(DEBUG_gc, "Releasing resources for thread %d", rc->ownerTSO->id);
+
+  // TODO: Check if there are any pointers into this RC before releasing all
+  //       the blocks
+
+  nat n = rc->max_blocks;
+  nat actual = 0;
+  bdescr *start;
+  for(start = rc->nursery->blocks; start != NULL; start = start->link) {
+    actual++;
+  }
+  if(actual != n) {
+    debugTrace(DEBUG_gc, "Found %d blocks to free in RC", actual);
+    debugTrace(DEBUG_gc, "%d blocks are supposed to be freed", n);
+  }
+
+  nat released = rc->max_blocks;
+  if(rc->parent != NULL) {
+    rc->parent->max_blocks += released;
+    rc->max_blocks = 0;
+
+    appendToFreeList(rc->parent, rc->nursery->blocks);
+    appendToFreeList(rc->parent, rc->pinned_object_block);
+    appendToFreeList(rc->parent, rc->pinned_object_blocks);
+    appendToFreeList(rc->parent, rc->large_objects);
+    appendToFreeList(rc->parent, rc->free_blocks);
+    debugTrace(DEBUG_gc, "Released %d blocks to parent", released);
+  } else {
+    debugTrace(DEBUG_gc, "Parent is NULL. Not realeasing resources");
+  }
+
+  if(rc->parent != NULL && rc->parent->isDead) {
+    releaseSpaceAndTime(rc->parent);
+  }
+  rc->isDead = rtsTrue;
 }

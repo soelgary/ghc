@@ -80,6 +80,11 @@ typedef struct ResourceContainer_ {
   RCChildren *children;
   nat id;
 
+  rtsBool isDead; // This is used to say if an RC is dead. A dead RC cannot
+                  // receive resources, but it wont be freed from memory. It
+                  // will continue
+
+
   memcount max_blocks;
   memcount used_blocks;
 
@@ -109,6 +114,11 @@ typedef struct ResourceContainer_ {
   bdescr *       blocks;              // blocks in this RC
   memcount       n_blocks;            // number of blocks
   memcount       n_words;             // number of used words
+
+  bdescr *       free_blocks; // free blocks that can be used anywhere
+                              // Allocation should not occur into any of these
+                              // until they are moved into a nursery, large_obj,
+                              // pinned_object, or gc list
 
   // rthread goes here but do this when working on the GC
 
