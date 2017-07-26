@@ -886,13 +886,13 @@ memInventory (rtsBool show)
       gen_blocks[g] += genBlocks(&generations[g]);
   }
 
-  nursery_blocks = 0;
-  //for (i = 0; i < n_nurseries; i++) {
-  //    ASSERT(countBlocks(nurseries[i].blocks) == nurseries[i].n_blocks);
-  //    nursery_blocks += nurseries[i].n_blocks;
-  //}
-
   ResourceContainer *rc;
+  nursery_blocks = 0;
+  for(rc = RC_LIST; rc != NULL; rc = rc->link) {
+    ASSERT(countBlocks(rc->nursery->blocks) == rc->nursery->n_blocks);
+    nursery_blocks += rc->nursery->n_blocks;
+  }
+
   rc_blocks = 0;
 
   for(rc = RC_LIST; rc != NULL; rc = rc->link) {

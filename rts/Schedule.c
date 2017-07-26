@@ -312,8 +312,10 @@ schedule (Capability *initialCapability, Task *task)
 
     rc = t->rc;
 
-
     // Set registers for the capability for this rc
+    cap->r.rCurrentNursery = rc->nursery->blocks;
+    cap->r.rCurrentAlloc = rc->currentAlloc;
+    cap->r.rNursery = rc->nursery;
     cap->mut_lists = rc->mut_lists;
     cap->weak_ptr_list_hd = rc->weak_ptr_list_hd;
     cap->weak_ptr_list_tl = rc->weak_ptr_list_tl;
@@ -465,6 +467,7 @@ run_thread:
         r = StgRun((StgFunPtr) stg_returnToStackTop, &cap->r);
         cap = regTableToCapability(r);
         ret = r->rRet;
+        rc->currentAlloc = cap->r.rCurrentAlloc;
         break;
     }
 

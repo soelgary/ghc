@@ -64,6 +64,12 @@ createThread(Capability *cap, W_ size)
 
     ResourceContainer *savedRC;
     bdescr *savedCurrentAlloc;
+    bdescr *savedCurrentNursery;
+    nursery *savedNursery;
+
+    savedCurrentAlloc = cap->r.rCurrentAlloc;
+    savedCurrentNursery = cap->r.rCurrentNursery;
+    savedNursery = cap->r.rNursery;
 
     if (cap->r.rCurrentTSO == NULL) {
         rc = RC_MAIN;
@@ -71,11 +77,12 @@ createThread(Capability *cap, W_ size)
         debugTrace(DEBUG_sched, "Parent is RC_MAIN");
     } else {
         rc = newRC(cap->r.rCurrentTSO->rc);
-        savedRC = cap->r.rCurrentTSO->rc;
-        savedCurrentAlloc = cap->r.rCurrentAlloc;
         // We want to charge the new thread for the allocation
+        savedRC = cap->r.rCurrentTSO->rc;
         cap->r.rCurrentAlloc = rc->currentAlloc;
         cap->r.rCurrentTSO->rc = rc;
+        cap->r.rNursery = rc->nursery;
+        cap->r.rCurrentNursery = rc->nursery->blocks;
         debugTrace(DEBUG_sched, "Parent is not RC_MAIN");
     }
 
@@ -157,6 +164,14 @@ createThread(Capability *cap, W_ size)
 
     // ToDo: report the stack size in the event?
     traceEventCreateThread(cap, tso);
+
+    // Restore registers
+    if(cap->r.rCurrentTSO != NULL) {
+        cap->r.rCurrentTSO->rc = savedRC;
+    }
+    cap->r.rCurrentAlloc = savedCurrentAlloc;
+    cap->r.rCurrentNursery = savedCurrentNursery;
+    cap->r.rNursery = savedNursery;
 
     return tso;
 }

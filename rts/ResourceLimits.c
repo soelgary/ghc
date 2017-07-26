@@ -47,7 +47,11 @@ allocGroupFor(W_ n, ResourceContainer *rc)
 bdescr *
 allocBlockFor(ResourceContainer *rc)
 {
-  return allocGroupFor(1, rc);
+  bdescr *bd = allocGroupFor(1, rc);
+  if(bd == NULL) {
+    barf("fukc");
+  }
+  return bd;
 }
 
 void
@@ -213,7 +217,7 @@ newRC(ResourceContainer *parent)
   rc->isDead = rtsFalse;
 
   nurse->blocks = bd;
-  nurse->n_blocks = 0; //TODO: Decrement used blocks by n_blocks?
+  nurse->n_blocks = initialNurserySize; //TODO: Decrement used blocks by n_blocks?
   nurse->rc = rc;
 
   rc->nursery = nurse;

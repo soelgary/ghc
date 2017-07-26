@@ -275,6 +275,9 @@ alloc_mega_group (StgWord mblocks)
             } else {
                 free_mblock_list = bd->link;
             }
+            if(bd->blocks == 0) {
+                barf("FGBELUIBGIRW");
+            }
             return bd;
         }
         else if (bd->blocks > n)
@@ -303,6 +306,9 @@ alloc_mega_group (StgWord mblocks)
         bd = FIRST_BDESCR(mblock);
     }
     bd->blocks = MBLOCK_GROUP_BLOCKS(mblocks);
+    if(bd->blocks == 0) {
+        barf("FGBELUIBGIRW");
+    }
     return bd;
 }
 
@@ -891,6 +897,9 @@ reportUnmarkedBlocks (void)
                     (BLOCKS_TO_MBLOCKS(bd->blocks) - 1) * MBLOCK_SIZE;
                 break;
             } else {
+                if(bd->blocks == 0) {
+                    barf("blocks is 0...");
+                }
                 bd += bd->blocks;
             }
         }

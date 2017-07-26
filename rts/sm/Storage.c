@@ -833,6 +833,7 @@ allocate (Capability *cap, W_ n)
         }
         dbl_link_onto(bd, &cap->r.rNursery->blocks);
         cap->r.rCurrentAlloc = bd;
+        rc->currentAlloc = bd;
         IF_DEBUG(sanity, checkNurserySanity(cap->r.rNursery));
     }
     p = bd->free;

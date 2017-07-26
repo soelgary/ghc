@@ -256,6 +256,8 @@ hs_init_ghc(int *argc, char **argv[], RtsConfig rts_config)
 
     /* Record initialization times */
     stat_endInit();
+
+    reportUnmarkedBlocks();
 }
 
 // Compatibility interface
