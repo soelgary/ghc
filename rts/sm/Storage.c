@@ -611,6 +611,10 @@ addBlockToNursery (ResourceContainer *rc, bdescr *currentNursery)
     nursery = rc->nursery;
     blocks = rc->nursery->n_blocks;
 
+    if(nursery->n_blocks > nurserySize) {
+        return rtsFalse;
+    }
+
     //int num_allocated = resizeNursery(nursery, blocks+1);
     int num_allocated = 1;
 
@@ -618,6 +622,7 @@ addBlockToNursery (ResourceContainer *rc, bdescr *currentNursery)
     bd = allocLargeChunk(1, n);
     bd->rc = nursery->rc;
     initBdescr(bd, g0, g0, nursery->rc);
+    nursery->n_blocks++;
     bd->blocks = 1;
     bd->flags = 0;
     currentNursery->link = bd;

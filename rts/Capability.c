@@ -1057,7 +1057,7 @@ shutdownCapabilities(Task *task, rtsBool safe)
 static void
 freeCapability (Capability *cap)
 {
-    stgFree(cap->mut_lists);
+    //stgFree(cap->r.rCurrentTSO->rc->mut_lists);
 #if defined(THREADED_RTS)
     freeSparkPool(cap->sparks);
 #endif

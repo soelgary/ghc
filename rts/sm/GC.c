@@ -179,8 +179,28 @@ void
 GarbageCollect (nat collect_gen,
                 rtsBool do_heap_census,
                 nat gc_type USED_IF_THREADS,
-                Capability *cap)
-{ }
+                ResourceContainer *rc)
+{
+    debugTrace(DEBUG_gc, "Starting GC");
+
+    N = collect_gen;
+    major_gc = (N == 2);
+    if (major_gc) {
+        debugTrace(DEBUG_gc, "major gc is not supported yet");
+    }
+
+    n_gc_threads = 1;
+
+#ifdef DEBUG
+  // check for memory leaks if DEBUG is on
+  memInventory(DEBUG_gc);
+#endif
+
+    // do this *before* we start scavenging
+    collectFreshWeakPtrsRC();
+
+    barf("GC not implemented yet");
+}
 
 /* -----------------------------------------------------------------------------
    Initialise the gc_thread structures.
@@ -197,15 +217,16 @@ new_gc_thread (nat n, gc_thread *t)
     nat g;
     gen_workspace *ws;
 
-    t->cap = capabilities[n];
+    //t->cap = capabilities[n];
 
 #ifdef THREADED_RTS
-    t->id = 0;
-    initSpinLock(&t->gc_spin);
-    initSpinLock(&t->mut_spin);
-    ACQUIRE_SPIN_LOCK(&t->gc_spin);
-    ACQUIRE_SPIN_LOCK(&t->mut_spin);
-    t->wakeup = GC_THREAD_INACTIVE;  // starts true, so we can wait for the
+    // TODO: Support threaded_rts
+    //t->id = 0;
+    //initSpinLock(&t->gc_spin);
+    //initSpinLock(&t->mut_spin);
+    //ACQUIRE_SPIN_LOCK(&t->gc_spin);
+    //ACQUIRE_SPIN_LOCK(&t->mut_spin);
+    //t->wakeup = GC_THREAD_INACTIVE;  // starts true, so we can wait for the
                           // thread to start up, see wakeup_gc_threads
 #endif
 
@@ -412,7 +433,7 @@ loop:
     dec_running();
 #endif
 
-    traceEventGcIdle(gct->cap);
+    //traceEventGcIdle(gct->cap);
 
     debugTrace(DEBUG_gc, "%d GC threads still running", r);
 
@@ -420,7 +441,7 @@ loop:
         // usleep(1);
         if (any_work()) {
             inc_running();
-            traceEventGcWork(gct->cap);
+            //traceEventGcWork(gct->cap);
             goto loop;
         }
         // any_work() does not remove the work from the queue, it
@@ -429,7 +450,7 @@ loop:
         // scavenge_loop() to perform any pending work.
     }
 
-    traceEventGcDone(gct->cap);
+    //traceEventGcDone(gct->cap);
 }
 
 #if defined(THREADED_RTS)
@@ -443,22 +464,22 @@ gcWorkerThread (Capability *cap)
     saved_gct = gct;
 
     SET_GCT(gc_threads[cap->no]);
-    gct->id = osThreadId();
+    //gct->id = osThreadId();
 
     // Wait until we're told to wake up
-    RELEASE_SPIN_LOCK(&gct->mut_spin);
+    //RELEASE_SPIN_LOCK(&gct->mut_spin);
     // yieldThread();
     //    Strangely, adding a yieldThread() here makes the CPU time
     //    measurements more accurate on Linux, perhaps because it syncs
     //    the CPU time across the multiple cores.  Without this, CPU time
     //    is heavily skewed towards GC rather than MUT.
-    gct->wakeup = GC_THREAD_STANDING_BY;
+    //gct->wakeup = GC_THREAD_STANDING_BY;
     debugTrace(DEBUG_gc, "GC thread %d standing by...", gct->thread_index);
-    ACQUIRE_SPIN_LOCK(&gct->gc_spin);
+    //ACQUIRE_SPIN_LOCK(&gct->gc_spin);
 
     init_gc_thread(gct);
 
-    traceEventGcWork(gct->cap);
+    //traceEventGcWork(gct->cap);
 
     // Every thread evacuates some roots.
     gct->evac_gen_no = 0;
@@ -478,11 +499,11 @@ gcWorkerThread (Capability *cap)
 #endif
 
     // Wait until we're told to continue
-    RELEASE_SPIN_LOCK(&gct->gc_spin);
-    gct->wakeup = GC_THREAD_WAITING_TO_CONTINUE;
-    debugTrace(DEBUG_gc, "GC thread %d waiting to continue...",
-               gct->thread_index);
-    ACQUIRE_SPIN_LOCK(&gct->mut_spin);
+    //RELEASE_SPIN_LOCK(&gct->gc_spin);
+    //gct->wakeup = GC_THREAD_WAITING_TO_CONTINUE;
+    //debugTrace(DEBUG_gc, "GC thread %d waiting to continue...",
+    //           gct->thread_index);
+    //ACQUIRE_SPIN_LOCK(&gct->mut_spin);
     debugTrace(DEBUG_gc, "GC thread %d on my way...", gct->thread_index);
 
     SET_GCT(saved_gct);
@@ -495,6 +516,7 @@ gcWorkerThread (Capability *cap)
 void
 waitForGcThreads (Capability *cap USED_IF_THREADS)
 {
+    /*
     const nat n_threads = n_capabilities;
     const nat me = cap->no;
     nat i, j;
@@ -521,6 +543,7 @@ waitForGcThreads (Capability *cap USED_IF_THREADS)
             yieldThread();
         }
     }
+    */
 }
 
 #endif // THREADED_RTS
@@ -536,6 +559,7 @@ start_gc_threads (void)
 static void
 wakeup_gc_threads (nat me USED_IF_THREADS)
 {
+  /*
 #if defined(THREADED_RTS)
     nat i;
 
@@ -552,6 +576,7 @@ wakeup_gc_threads (nat me USED_IF_THREADS)
         RELEASE_SPIN_LOCK(&gc_threads[i]->gc_spin);
     }
 #endif
+  */
 }
 
 // After GC is complete, we must wait for all GC threads to enter the
@@ -560,6 +585,7 @@ wakeup_gc_threads (nat me USED_IF_THREADS)
 static void
 shutdown_gc_threads (nat me USED_IF_THREADS)
 {
+    /*
 #if defined(THREADED_RTS)
     nat i;
 
@@ -573,12 +599,14 @@ shutdown_gc_threads (nat me USED_IF_THREADS)
         }
     }
 #endif
+*/
 }
 
 #if defined(THREADED_RTS)
 void
 releaseGCThreads (Capability *cap USED_IF_THREADS)
 {
+    /*
     const nat n_threads = n_capabilities;
     const nat me = cap->no;
     nat i;
@@ -591,6 +619,7 @@ releaseGCThreads (Capability *cap USED_IF_THREADS)
         ACQUIRE_SPIN_LOCK(&gc_threads[i]->gc_spin);
         RELEASE_SPIN_LOCK(&gc_threads[i]->mut_spin);
     }
+    */
 }
 #endif
 
@@ -611,8 +640,9 @@ prepare_collected_gen (generation *gen)
     g = gen->no;
     if (g != 0) {
         for (i = 0; i < n_capabilities; i++) {
-            freeChain(capabilities[i]->mut_lists[g]);
-            capabilities[i]->mut_lists[g] = allocBlock();
+            // TODO: add this back with RCs
+            //freeChain(capabilities[i]->mut_lists[g]);
+            //capabilities[i]->mut_lists[g] = allocBlock();
         }
     }
 
@@ -845,7 +875,7 @@ collect_pinned_object_blocks (void)
 static void
 init_gc_thread (gc_thread *t)
 {
-    t->static_objects = END_OF_STATIC_OBJECT_LIST;
+    /*t->static_objects = END_OF_STATIC_OBJECT_LIST;
     t->scavenged_static_objects = END_OF_STATIC_OBJECT_LIST;
     t->scan_bd = NULL;
     t->mut_lists = t->cap->mut_lists;
@@ -857,7 +887,7 @@ init_gc_thread (gc_thread *t)
     t->scanned = 0;
     t->any_work = 0;
     t->no_work = 0;
-    t->scav_find_work = 0;
+    t->scav_find_work = 0;*/
 }
 
 /* -----------------------------------------------------------------------------

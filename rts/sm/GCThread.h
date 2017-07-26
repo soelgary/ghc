@@ -76,7 +76,7 @@
   
    ------------------------------------------------------------------------- */
 
-typedef struct gen_workspace_ {
+struct gen_workspace_ {
     generation * gen;           // the gen for this workspace
     struct gc_thread_ * my_gct; // the gc_thread that contains this workspace
 
@@ -104,7 +104,7 @@ typedef struct gen_workspace_ {
 
     StgWord pad[1];
 
-} gen_workspace ATTRIBUTE_ALIGNED(64);
+} ATTRIBUTE_ALIGNED(64);
 // align so that computing gct->gens[n] is a shift, not a multiply
 // fails if the size is <64, which is why we need the pad above
 
@@ -117,7 +117,60 @@ typedef struct gen_workspace_ {
    of the GC threads
    ------------------------------------------------------------------------- */
 
-typedef struct gc_thread_ {
+struct gc_thread_ {
+    nat thread_index;
+    rtsBool idle; // I dont think we need this?
+
+    ResourceContainer *rc;
+
+    bdescr *free_blocks;
+
+    StgClosure *static_objects;
+    StgClosure *scavenged_static_objects;
+
+    W_ gc_count;
+
+    bdescr *scan_bd;
+
+    bdescr **mut_lists;
+
+    nat evac_gen_no;
+
+    rtsBool failed_to_evac;
+
+    rtsBool eager_promotion;
+
+    W_ thunk_selector_depth;
+
+
+    // -------------------
+    // stats
+
+    W_ copied;
+    W_ scanned;
+    W_ any_work;
+    W_ no_work;
+    W_ scav_find_work;
+
+    Time gc_start_cpu;   // process CPU time
+    Time gc_sync_start_elapsed;  // start of GC sync
+    Time gc_start_elapsed;  // process elapsed time
+    W_ gc_start_faults;
+
+    // -------------------
+    // workspaces
+
+    // array of workspaces, indexed by gen->abs_no.  This is placed
+    // directly at the end of the gc_thread structure so that we can get from
+    // the gc_thread pointer to a workspace using only pointer
+    // arithmetic, no memory access.  This happens in the inner loop
+    // of the GC, see Evac.c:alloc_for_copy().
+    gen_workspace gens[];
+
+};
+
+/*
+struct gc_thread_ {
     Capability *cap;
 
 #ifdef THREADED_RTS
@@ -197,7 +250,8 @@ typedef struct gc_thread_ {
     // arithmetic, no memory access.  This happens in the inner loop
     // of the GC, see Evac.c:alloc_for_copy().
     gen_workspace gens[];
-} gc_thread;
+};
+*/
 
 
 extern nat n_gc_threads;

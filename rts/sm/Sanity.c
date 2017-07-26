@@ -865,7 +865,7 @@ memInventory (rtsBool show)
   */
 
   nat g, i;
-  W_ gen_blocks[RtsFlags.GcFlags.generations];
+  W_ gen_blocks[numGenerations];
   W_ nursery_blocks, retainer_blocks,
        arena_blocks, exec_blocks, rc_blocks;
   W_ live_blocks = 0, free_blocks = 0;
@@ -873,13 +873,15 @@ memInventory (rtsBool show)
 
   // count the blocks we current have
 
-  for (g = 0; g < RtsFlags.GcFlags.generations; g++) {
+  for (g = 0; g < numGenerations; g++) {
       gen_blocks[g] = 0;
-      for (i = 0; i < n_capabilities; i++) {
-          gen_blocks[g] += countBlocks(capabilities[i]->mut_lists[g]);
-          gen_blocks[g] += countBlocks(gc_threads[i]->gens[g].part_list);
-          gen_blocks[g] += countBlocks(gc_threads[i]->gens[g].scavd_list);
-          gen_blocks[g] += countBlocks(gc_threads[i]->gens[g].todo_bd);
+      ResourceContainer *rc;
+      for (rc = RC_MAIN; rc != NULL; rc = rc->link) {
+          gen_blocks[g] += countBlocks(rc->mut_lists[g]);
+
+          gen_blocks[g] += countBlocks(rc->gc_thread->gens[g].part_list);
+          gen_blocks[g] += countBlocks(rc->gc_thread->gens[g].scavd_list);
+          gen_blocks[g] += countBlocks(rc->gc_thread->gens[g].todo_bd);
       }
       gen_blocks[g] += genBlocks(&generations[g]);
   }

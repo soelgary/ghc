@@ -327,12 +327,13 @@ hs_exit_(rtsBool wait_foreign)
     /* stop all running tasks */
     exitScheduler(wait_foreign);
 
+    ResourceContainer *rc;
     /* run C finalizers for all active weak pointers */
-    for (i = 0; i < n_capabilities; i++) {
-        runAllCFinalizers(capabilities[i]->weak_ptr_list_hd);
-    }
-    for (g = 0; g < RtsFlags.GcFlags.generations; g++) {
-        runAllCFinalizers(generations[g].weak_ptr_list);
+    for (rc = RC_MAIN; rc != NULL; rc = rc->link) {
+        runAllCFinalizers(rc->weak_ptr_list_hd);
+        for (g = 0; g < numGenerations; g++) {
+            runAllCFinalizers(rc->generations[g].weak_ptr_list);
+        }
     }
 
 #if defined(RTS_USER_SIGNALS)

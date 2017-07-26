@@ -63,6 +63,11 @@ typedef StgWord memcount;
 
 typedef struct nursery_ nursery;
 
+typedef struct gen_workspace_ gen_workspace;
+typedef struct gc_thread_ gc_thread;
+
+typedef struct generation_ generation;
+
 typedef struct RCChildren_ {
   struct ResourceContainer_ *child;
   struct RCChildren_ *next;
@@ -122,9 +127,18 @@ typedef struct ResourceContainer_ {
 
   // rthread goes here but do this when working on the GC
 
+  // per-capability weak pointer list associated with nursery (older
+  // lists stored in generation object)
+  StgWeak *weak_ptr_list_hd;
+  StgWeak *weak_ptr_list_tl;
+
   nursery *nursery;
 
   bdescr *currentAlloc;
+
+  gc_thread *gc_thread;
+
+  generation *generations;
 
 } ResourceContainer;
 
@@ -155,7 +169,7 @@ struct nursery_ {
 // See also Note [allocation accounting] to understand how total
 // memory allocation is tracked.
 
-typedef struct generation_ {
+struct generation_ {
     nat            no;                  // generation number
 
     memcount       max_blocks;          // max blocks
@@ -200,7 +214,7 @@ typedef struct generation_ {
 
     StgTSO *     old_threads;
     StgWeak *    old_weak_ptr_list;
-} generation;
+};
 
 extern generation * generations;
 extern generation * g0;

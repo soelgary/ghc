@@ -16,6 +16,10 @@ nat RC_COUNT = 0;
 nat unreclaimable_count = 10;
 nat min_reclaimable_count = 1;
 
+extern nat numGenerations = 2;
+
+extern nat nurserySize = 5;
+
 bdescr *
 allocGroupFor(W_ n, ResourceContainer *rc)
 {
@@ -63,9 +67,106 @@ addChild(ResourceContainer *parent, ResourceContainer *child)
   parent->children = childLink;
 }
 
+void
+initRCGeneration(generation *gen, ResourceContainer *rc, nat genNumber)
+{
+  gen->no = genNumber;
+  gen->collections = 0;
+  gen->par_collections = 0;
+  gen->failed_promotions = 0;
+  gen->max_blocks = 0;
+  gen->live_estimate = 0;
+  gen->old_blocks = NULL;
+  gen->n_old_blocks = 0;
+  gen->scavenged_large_objects = NULL;
+  gen->n_scavenged_large_blocks = 0;
+  gen->mark = 0;
+  gen->compact = 0;
+  gen->bitmap = NULL;
+//#ifdef THREADED_RTS
+//  initSpinLock(&gen->sync);
+//#endif
+  gen->threads = END_TSO_QUEUE;
+  gen->old_threads = END_TSO_QUEUE;
+  gen->weak_ptr_list = NULL;
+  gen->old_weak_ptr_list = NULL;
+}
+
+void
+initGenerations(ResourceContainer *rc)
+{
+  nat g;
+  for(g = 0; g < numGenerations; g++) {
+    initRCGeneration(&rc->generations[g], rc, g);
+  }
+}
+
+void
+initGCThread(ResourceContainer *rc)
+{
+
+  gc_thread *gct = stgMallocBytes(sizeof(gc_thread) +
+                                  (sizeof(gen_workspace) * 2),
+                                 "newGCThread");
+  rc->gc_thread = gct;
+
+  gct->thread_index = 0;
+  gct->idle = rtsFalse;
+  gct->free_blocks = NULL;
+  gct->static_objects = END_OF_STATIC_OBJECT_LIST;
+  gct->scavenged_static_objects = END_OF_STATIC_OBJECT_LIST;
+  gct->gc_count = 0;
+  gct->scan_bd = NULL;
+  gct->mut_lists = rc->mut_lists;
+  gct->evac_gen_no = 0;
+  gct->failed_to_evac = rtsFalse;
+  gct->eager_promotion = rtsTrue;
+  gct->thunk_selector_depth = 0;
+  gct->rc = rc;
+  
+  gct->copied = 0;
+  gct->scanned = 0;
+  gct->any_work = 0;
+  gct->no_work = 0;
+  gct->scav_find_work = 0;
+
+  nat g;
+  gen_workspace *ws;
+  for(g = 0; g < numGenerations; g++) {
+    ws = &gct->gens[g];
+    ws->gen = &rc->generations[g];
+    ws->my_gct = gct;
+    
+    bdescr *bd = allocBlockFor(rc);
+    bd->flags = BF_EVACUATED;
+    bd->u.scan = bd->free = bd->start;
+
+    ws->todo_bd = bd;
+    ws->todo_free = bd->free;
+    ws->todo_lim = bd->start + BLOCK_SIZE_W;
+
+    ws->todo_q = newWSDeque(128);
+    ws->todo_overflow = NULL;
+    ws->n_todo_overflow = 0;
+    ws->todo_large_objects = NULL;
+
+    ws->part_list = NULL;
+    ws->n_part_blocks = 0;
+    ws->n_part_words = 0;
+
+    ws->scavd_list = NULL;
+    ws->n_scavd_blocks = 0;
+    ws->n_scavd_words = 0;
+  }
+
+}
+
+
 ResourceContainer *
 newRC(ResourceContainer *parent)
 {
+  // TODO: Allocate generations here!
+
   // TODO: Think about sane defaults for number of children. Is it a constant
   // number? Is it based on the number of blocks?
   // We need this becuase there are two separate memory partitions: for haskell
@@ -100,6 +201,11 @@ newRC(ResourceContainer *parent)
       barf("Unknown heap size");
   }
 
+  generation *generations = stgMallocBytes(numGenerations * sizeof(generation),
+                                           "createGenerations");
+  rc->generations = generations;
+
+
   nursery *nurse = stgMallocBytes(sizeof(struct nursery_), "rcCreateNursery");
   memcount initialNurserySize = 1;
   bdescr *bd = allocNursery(NULL, initialNurserySize, rc);
@@ -126,6 +232,9 @@ newRC(ResourceContainer *parent)
   rc->n_words = 0;
   rc->max_blocks = max_blocks;
 
+  rc->weak_ptr_list_hd = NULL;
+  rc->weak_ptr_list_tl = NULL;
+
   rc->parent = parent;
   rc->free_blocks = NULL;
 
@@ -148,6 +257,9 @@ newRC(ResourceContainer *parent)
   }
 
   rc->id = RC_COUNT;
+
+  initGenerations(rc);
+  initGCThread(rc);
 
   RC_LIST = rc;
   RC_COUNT++;
@@ -234,7 +346,7 @@ releaseSpaceAndTime(ResourceContainer *rc)
   debugTrace(DEBUG_gc, "Releasing resources for thread %d", rc->ownerTSO->id);
 
   // TODO: Check if there are any pointers into this RC before releasing all
-  //       the blocks
+  //       the blocks. Maybe have a remembered set for this?
 
   nat n = rc->max_blocks;
   nat actual = 0;
@@ -267,3 +379,4 @@ releaseSpaceAndTime(ResourceContainer *rc)
   }
   rc->isDead = rtsTrue;
 }
+

@@ -312,6 +312,13 @@ schedule (Capability *initialCapability, Task *task)
 
     rc = t->rc;
 
+
+    // Set registers for the capability for this rc
+    cap->mut_lists = rc->mut_lists;
+    cap->weak_ptr_list_hd = rc->weak_ptr_list_hd;
+    cap->weak_ptr_list_tl = rc->weak_ptr_list_tl;
+    // End set registers
+
     // Sanity check the thread we're about to run.  This can be
     // expensive if there is lots of thread switching going on...
     IF_DEBUG(sanity,checkTSO(t));
@@ -1168,19 +1175,19 @@ scheduleHandleHeapOverflow( Capability *cap, StgTSO *t )
     // if we got here because we exceeded large_alloc_lim, then
     // proceed straight to GC.
     if (t->rc->n_new_large_words >= large_alloc_lim) {
-        barf("Need to actually GC here... Large alloc limit exceeded.");
+        debugTrace(DEBUG_gc, "Need to actually GC here... Large alloc limit exceeded.");
         return rtsTrue;
     }
 
     // Otherwise, we just ran out of space in the current nursery.
     // Grab another nursery if we can.
     if (addBlockToNursery(t->rc, cap->r.rCurrentNursery)) {
-        debugTrace(DEBUG_sched, "thread %ld got a new block", t->id);
+        debugTrace(DEBUG_gc, "thread %ld got a new block", t->id);
         return rtsFalse;
+    } else {
+        debugTrace(DEBUG_gc, "Nursery is full. Starting the GC..");
+        return rtsTrue;
     }
-    //barf("Cannot get a new nursery for greedy capabilities");
-    barf("Need to actually GC here...");
-    return rtsTrue;
     /* actual GC is done at the end of the while loop in schedule() */
 }
 

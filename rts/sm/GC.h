@@ -20,7 +20,7 @@
 
 void GarbageCollect (rtsBool force_major_gc,
                      rtsBool do_heap_census,
-                     nat gc_type, Capability *cap);
+                     nat gc_type,  ResourceContainer *rc);
 
 typedef void (*evac_fn)(void *user, StgClosure **root);
 

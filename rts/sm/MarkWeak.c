@@ -380,22 +380,18 @@ static void checkWeakPtrSanity(StgWeak *hd, StgWeak *tl)
 }
 #endif
 
-void collectFreshWeakPtrs()
+void
+collectFreshWeakPtrsRC(ResourceContainer *rc)
 {
-    nat i;
-    generation *gen = &generations[0];
-    // move recently allocated weak_ptr_list to the old list as well
-    for (i = 0; i < n_capabilities; i++) {
-        Capability *cap = capabilities[i];
-        if (cap->weak_ptr_list_tl != NULL) {
-            IF_DEBUG(sanity, checkWeakPtrSanity(cap->weak_ptr_list_hd, cap->weak_ptr_list_tl));
-            cap->weak_ptr_list_tl->link = gen->weak_ptr_list;
-            gen->weak_ptr_list = cap->weak_ptr_list_hd;
-            cap->weak_ptr_list_tl = NULL;
-            cap->weak_ptr_list_hd = NULL;
-        } else {
-            ASSERT(cap->weak_ptr_list_hd == NULL);
-        }
+    generation *gen = &rc->generations[0];
+    if (rc->weak_ptr_list_tl != NULL) {
+        IF_DEBUG(sanity, checkWeakPtrSanity(rc->weak_ptr_list_hd, rc->weak_ptr_list_tl));
+        rc->weak_ptr_list_tl->link = gen->weak_ptr_list;
+        gen->weak_ptr_list = rc->weak_ptr_list_hd;
+        rc->weak_ptr_list_tl = NULL;
+        rc->weak_ptr_list_hd = NULL;
+    } else {
+        ASSERT(rc->weak_ptr_list_hd == NULL);
     }
 }
 

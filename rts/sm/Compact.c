@@ -954,7 +954,8 @@ compact(StgClosure *static_objects)
     }
 
     // mutable lists
-    for (g = 1; g < RtsFlags.GcFlags.generations; g++) {
+    // TODO: do this for RCs
+    /*for (g = 1; g < RtsFlags.GcFlags.generations; g++) {
         bdescr *bd;
         StgPtr p;
         for (n = 0; n < n_capabilities; n++) {
@@ -965,7 +966,7 @@ compact(StgClosure *static_objects)
                 }
             }
         }
-    }
+    }*/
 
     // the global thread list
     for (g = 0; g < RtsFlags.GcFlags.generations; g++) {

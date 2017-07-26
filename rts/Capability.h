@@ -68,12 +68,12 @@ struct Capability_ {
     InCall *suspended_ccalls;
     uint32_t n_suspended_ccalls;
 
+    // These needs to be set at the beginning of schedule()
+    bdescr **mut_lists;
     // per-capability weak pointer list associated with nursery (older
     // lists stored in generation object)
     StgWeak *weak_ptr_list_hd;
     StgWeak *weak_ptr_list_tl;
-
-    bdescr **mut_lists; // DONT USE THIS
 
     // Context switch flag.  When non-zero, this means: stop running
     // Haskell code, and switch threads.

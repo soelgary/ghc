@@ -20,5 +20,7 @@ typedef struct ResourceContainer_ ResourceContainer;
 extern ResourceContainer *RC_MAIN;
 extern ResourceContainer *RC_LIST;
 extern nat RC_COUNT;
+extern nat nurserySize;
+extern nat numGenerations;
 
 #endif /* RTS_RESOURCE_LIMITS_H */
