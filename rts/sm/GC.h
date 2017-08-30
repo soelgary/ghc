@@ -23,6 +23,7 @@ void GarbageCollect (rtsBool force_major_gc,
                      nat gc_type,  ResourceContainer *rc);
 
 typedef void (*evac_fn)(void *user, StgClosure **root);
+typedef void (*evac_fn_rc)(void *user, StgClosure **root, ResourceContainer *rc, nat genNumber);
 
 StgClosure * isAlive      ( StgClosure *p );
 void         markCAFs     ( evac_fn evac, void *user );

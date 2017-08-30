@@ -27,7 +27,7 @@ StgPtr  alloc_todo_block     (gen_workspace *ws, nat size);
 
 bdescr *grab_local_todo_block  (gen_workspace *ws);
 #if defined(THREADED_RTS)
-bdescr *steal_todo_block       (nat s);
+bdescr *steal_todo_block       (ResourceContainer *rc, nat s);
 #endif
 
 // Returns true if a block is partially full.  This predicate is used to try
@@ -48,17 +48,17 @@ void printMutableList (bdescr *bd);
 // mutable lists attached to the current gc_thread structure, which
 // are the same as the mutable lists on the Capability.
 INLINE_HEADER void
-recordMutableGen_GC (StgClosure *p, nat gen_no)
+recordMutableGen_GC (StgClosure *p, nat gen_no, gc_thread *gt)
 {
     bdescr *bd;
 
-    bd = gct->mut_lists[gen_no];
+    bd = gt->mut_lists[gen_no];
     if (bd->free >= bd->start + BLOCK_SIZE_W) {
         bdescr *new_bd;
         new_bd = allocBlock_sync();
         new_bd->link = bd;
         bd = new_bd;
-        gct->mut_lists[gen_no] = bd;
+        gt->mut_lists[gen_no] = bd;
     }
     *bd->free++ = (StgWord)p;
 }

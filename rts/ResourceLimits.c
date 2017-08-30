@@ -40,7 +40,10 @@ allocGroupFor(W_ n, ResourceContainer *rc)
   }
   bdescr *bd = allocGroup(n);
   ASSERT(real == 0 || bd->blocks == real);
-  bd->rc = rc;
+  bdescr *curr;
+  for(curr = bd; curr != NULL; curr = curr->link) {
+    curr->rc = rc;
+  }
   return bd;
 }
 
@@ -72,28 +75,31 @@ addChild(ResourceContainer *parent, ResourceContainer *child)
 }
 
 void
-initRCGeneration(generation *gen, ResourceContainer *rc, nat genNumber)
+initRCGeneration(ResourceContainer *rc, nat genNumber)
 {
-  gen->no = genNumber;
-  gen->collections = 0;
-  gen->par_collections = 0;
-  gen->failed_promotions = 0;
-  gen->max_blocks = 0;
-  gen->live_estimate = 0;
-  gen->old_blocks = NULL;
-  gen->n_old_blocks = 0;
-  gen->scavenged_large_objects = NULL;
-  gen->n_scavenged_large_blocks = 0;
-  gen->mark = 0;
-  gen->compact = 0;
-  gen->bitmap = NULL;
+  rc->generations[genNumber]->no = genNumber;
+  rc->generations[genNumber]->collections = 0;
+  rc->generations[genNumber]->par_collections = 0;
+  rc->generations[genNumber]->failed_promotions = 0;
+  rc->generations[genNumber]->max_blocks = 0;
+  rc->generations[genNumber]->live_estimate = 0;
+  rc->generations[genNumber]->old_blocks = NULL;
+  rc->generations[genNumber]->n_old_blocks = 0;
+  rc->generations[genNumber]->scavenged_large_objects = NULL;
+  rc->generations[genNumber]->n_scavenged_large_blocks = 0;
+  rc->generations[genNumber]->mark = 0;
+  rc->generations[genNumber]->compact = 0;
+  rc->generations[genNumber]->bitmap = NULL;
 //#ifdef THREADED_RTS
 //  initSpinLock(&gen->sync);
 //#endif
-  gen->threads = END_TSO_QUEUE;
-  gen->old_threads = END_TSO_QUEUE;
-  gen->weak_ptr_list = NULL;
-  gen->old_weak_ptr_list = NULL;
+  rc->generations[genNumber]->threads = END_TSO_QUEUE;
+  rc->generations[genNumber]->old_threads = END_TSO_QUEUE;
+  rc->generations[genNumber]->weak_ptr_list = NULL;
+  rc->generations[genNumber]->old_weak_ptr_list = NULL;
+  rc->generations[genNumber]->blocks = NULL;
+  rc->generations[genNumber]->n_blocks = 0;
+  rc->generations[genNumber]->n_words = 0;
 }
 
 void
@@ -101,7 +107,9 @@ initGenerations(ResourceContainer *rc)
 {
   nat g;
   for(g = 0; g < numGenerations; g++) {
-    initRCGeneration(&rc->generations[g], rc, g);
+    generation *gen = stgMallocBytes(sizeof(generation), "newGeneration");
+    rc->generations[g] = gen;
+    initRCGeneration(rc, g);
   }
 }
 
@@ -138,7 +146,7 @@ initGCThread(ResourceContainer *rc)
   gen_workspace *ws;
   for(g = 0; g < numGenerations; g++) {
     ws = &gct->gens[g];
-    ws->gen = &rc->generations[g];
+    ws->gen = rc->generations[g];
     ws->my_gct = gct;
     
     bdescr *bd = allocBlockFor(rc);
@@ -191,12 +199,12 @@ newRC(ResourceContainer *parent)
   memcount max_blocks;
 
   if (parent != NULL) {
-    if (parent->max_blocks - parent->n_blocks > unreclaimable_count + min_reclaimable_count) {
+    if (parent->max_blocks - parent->used_blocks > unreclaimable_count + min_reclaimable_count) {
       max_blocks = parent->max_blocks / 2; // TODO: Need to take unused blocks
       debugTrace(DEBUG_gc, "Resource container is created from a parent with %d blocks. This RC is stealing %d", parent->max_blocks, max_blocks);
       parent->max_blocks = parent->max_blocks - max_blocks;
     } else {
-      barf("Cannot create a resource container when the parent has %d free blocks", parent->max_blocks - parent->n_blocks);
+      barf("Cannot create a resource container when the parent has %d free blocks", parent->max_blocks - parent->used_blocks);
     }
   } else if (RtsFlags.GcFlags.maxHeapSize) {
     max_blocks = RtsFlags.GcFlags.maxHeapSize; // Divide by the size of a block
@@ -205,9 +213,8 @@ newRC(ResourceContainer *parent)
       barf("Unknown heap size");
   }
 
-  generation *generations = stgMallocBytes(numGenerations * sizeof(generation),
-                                           "createGenerations");
-  rc->generations = generations;
+  rc->generations = stgMallocBytes(numGenerations * sizeof(struct generation_ *),
+                                   "createGenerations");
 
 
   nursery *nurse = stgMallocBytes(sizeof(struct nursery_), "rcCreateNursery");
@@ -231,9 +238,6 @@ newRC(ResourceContainer *parent)
   rc->n_large_words = 0;
   rc->n_new_large_words = 0;
 
-  rc->blocks = NULL;
-  rc->n_blocks = 0;
-  rc->n_words = 0;
   rc->max_blocks = max_blocks;
 
   rc->weak_ptr_list_hd = NULL;
@@ -297,6 +301,8 @@ initRC()
 W_
 countRCBlocks(ResourceContainer *rc)
 {
+  // TODO: Implement this properly
+  /*
   ASSERT(countBlocks(rc->blocks) == rc->n_blocks);
   ASSERT(countBlocks(rc->large_objects) == rc->n_large_blocks);
 
@@ -311,12 +317,11 @@ countRCBlocks(ResourceContainer *rc)
 
   numBlocks += countBlocks(rc->large_objects) + rc->n_blocks;
 
-  /*
-    TODO: RCs only track the nursery. We need to also keep track of blocks in
-          the generations.
-  */
+  numBlocks += countBlocks(rc->free_blocks);
 
   return numBlocks;
+  */
+  return 0;
 }
 
 void
@@ -384,3 +389,29 @@ releaseSpaceAndTime(ResourceContainer *rc)
   rc->isDead = rtsTrue;
 }
 
+void
+markRC(evac_fn_rc evac, ResourceContainer *rc, rtsBool dontMarkSparks)
+{
+  // TODO RC: We need to mark the other roots. But first, figure out what 
+  // they are!
+  InCall *incall;
+
+  // We only evac the first gen?
+  nat genNumber = 0;
+
+  evac(rc, (StgClosure **)(void *)&rc->ownerTSO, rc, genNumber);
+
+  /*
+    What are the roots of the RC?
+    - owner TSO
+    - 
+
+    What are the roots of a capability?
+    - run queue head
+    - run queue tail
+    - inbox
+    - suspended tsos
+    - sparks
+    - STMs
+  */
+}

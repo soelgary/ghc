@@ -780,8 +780,14 @@ findPtr(P_ p, int follow)
   }
 
   for (rc = RC_LIST; rc != NULL; rc = rc->link) {
-      bd = rc->blocks;
-      i = findPtrBlocks(p,bd,arr,arr_size,i);
+      for(g = 0; g < numGenerations; g++) {
+        bd = rc->generations[g]->blocks;
+        i = findPtrBlocks(p,bd,arr,arr_size,i);
+        if (i >= arr_size) return;
+      }
+  }
+
+  for (rc = RC_LIST; rc != NULL; rc = rc->link) {
       bd = rc->large_objects;
       i = findPtrBlocks(p,bd,arr,arr_size,i);
       if (i >= arr_size) return;

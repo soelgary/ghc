@@ -21,9 +21,9 @@ extern StgTSO *resurrected_threads;
 extern StgTSO *exception_threads;
 
 void    collectFreshWeakPtrs   ( void );
-void    initWeakForGC          ( void );
-rtsBool traverseWeakPtrList    ( void );
-void    markWeakPtrList        ( void );
+void    initWeakForGC          ( ResourceContainer *rc );
+rtsBool traverseWeakPtrList    ( ResourceContainer *rc );
+void    markWeakPtrList        ( ResourceContainer *rc );
 void    scavengeLiveWeak       ( StgWeak * );
 
 #include "EndPrivate.h"

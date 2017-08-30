@@ -32,6 +32,7 @@ StgWord64 whitehole_spin = 0;
 
 #if defined(THREADED_RTS) && !defined(PARALLEL_GC)
 #define evacuate(p) evacuate1(p)
+#define evacuate_rc(p,rc) evacuate_rc1(p,rc)
 #define HEAP_ALLOCED_GC(p) HEAP_ALLOCED(p)
 #endif
 
@@ -396,9 +397,15 @@ evacuate_static_object (StgClosure **link_field, StgClosure *q)
    gets spilled to the stack inside evacuate(), resulting in far more
    extra reads/writes than we save.
    ------------------------------------------------------------------------- */
-
 REGPARM1 GNUC_ATTR_HOT void
 evacuate(StgClosure **p)
+{
+    barf("Use evacuate_rc now");
+}
+
+
+REGPARM1 GNUC_ATTR_HOT void
+evacuate_rc(StgClosure **p, ResourceContainer *rc)
 {
   bdescr *bd = NULL;
   nat gen_no;
@@ -458,6 +465,8 @@ loop:
   }
 
   bd = Bdescr((P_)q);
+  // TODO: Remove this
+  return;
 
   if ((bd->flags & (BF_LARGE | BF_MARKED | BF_EVACUATED)) != 0) {
 

@@ -334,7 +334,7 @@ hs_exit_(rtsBool wait_foreign)
     for (rc = RC_MAIN; rc != NULL; rc = rc->link) {
         runAllCFinalizers(rc->weak_ptr_list_hd);
         for (g = 0; g < numGenerations; g++) {
-            runAllCFinalizers(rc->generations[g].weak_ptr_list);
+            runAllCFinalizers(rc->generations[g]->weak_ptr_list);
         }
     }
 

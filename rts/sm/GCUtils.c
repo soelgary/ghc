@@ -113,8 +113,9 @@ grab_local_todo_block (gen_workspace *ws)
 
 #if defined(THREADED_RTS)
 bdescr *
-steal_todo_block (nat g)
+steal_todo_block (ResourceContainer *rc, nat g)
 {
+    barf('steal_todo_block is not supported in RC');
     nat n;
     bdescr *bd;
 
@@ -329,7 +330,7 @@ alloc_todo_block (gen_workspace *ws, nat size)
         } else {
             bd = allocBlock_sync();
         }
-        initBdescr(bd, ws->gen, ws->gen->to, bd->rc);
+        initBdescr(bd, ws->gen, ws->gen->to, ws->my_gct->rc);
         bd->flags = BF_EVACUATED;
         bd->u.scan = bd->free = bd->start;
     }

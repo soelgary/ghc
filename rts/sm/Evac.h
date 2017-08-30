@@ -32,8 +32,10 @@
 #define REGPARM1
 #endif
 
-REGPARM1 void evacuate  (StgClosure **p);
-REGPARM1 void evacuate1 (StgClosure **p);
+REGPARM1 void evacuate      (StgClosure **p);
+REGPARM1 void evacuate_rc   (StgClosure **p, ResourceContainer *rc);
+REGPARM1 void evacuate_rc1  (StgClosure **p, ResourceContainer *rc);
+REGPARM1 void evacuate1     (StgClosure **p);
 
 extern W_ thunk_selector_depth;
 

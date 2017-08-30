@@ -216,7 +216,7 @@ void storageAddCapabilities (nat from, nat to)
 #if defined(THREADED_RTS) && defined(llvm_CC_FLAVOR) && (CC_SUPPORTS_TLS == 0)
     newThreadLocalKey(&gctKey);
 #endif
-    initGcThreads(from, to);
+    //initGcThreads(from, to);
 }
 
 
@@ -625,8 +625,14 @@ addBlockToNursery (ResourceContainer *rc, bdescr *currentNursery)
     nursery->n_blocks++;
     bd->blocks = 1;
     bd->flags = 0;
-    currentNursery->link = bd;
-    bd->u.back = currentNursery;
+    
+    //currentNursery->link = bd;
+    
+    //bd->u.back = currentNursery;
+
+    dbl_link_onto(bd, &currentNursery);
+    rc->currentAlloc = bd;
+    rc->nursery->blocks = bd;
     
     
     rc->used_blocks = rc->used_blocks + num_allocated;
@@ -776,8 +782,10 @@ allocate (Capability *cap, W_ n)
         // The CurrentAlloc block is full, we need to find another
         // one.  First, we try taking the next block from the
         // nursery:
-        bd = cap->r.rCurrentNursery->link;
         
+        //bd = cap->r.rCurrentNursery->link;
+        bd = rc->nursery->blocks->link;
+
         if (bd == NULL && rc->free_blocks == NULL) {
             debugTrace(DEBUG_gc, "Allocating a fresh block");
             // The nursery is empty: allocate a fresh block (we can't
@@ -795,7 +803,8 @@ allocate (Capability *cap, W_ n)
             debugTrace(DEBUG_gc, "Stealing a block from the free list");
             bd = rc->free_blocks;
             rc->free_blocks = bd->link;
-            cap->r.rNursery->n_blocks++;
+            //cap->r.rNursery->n_blocks++;
+            rc->nursery->n_blocks++;
             initBdescr(bd,g0,g0,rc);
             bd->flags = 0;
             bd->link = NULL;
@@ -826,12 +835,16 @@ allocate (Capability *cap, W_ n)
             // The point is to get the block out of the way of the
             // advancing CurrentNursery pointer, while keeping it
             // on the nursery list so we don't lose track of it.
-            cap->r.rCurrentNursery->link = bd->link;
+            
+            //cap->r.rCurrentNursery->link = bd->link;
+            rc->nursery->blocks->link = bd->link;
             if (bd->link != NULL) {
-                bd->link->u.back = cap->r.rCurrentNursery;
+                //bd->link->u.back = cap->r.rCurrentNursery;
+                bd->link->u.back = rc->nursery->blocks;
             }
         }
-        dbl_link_onto(bd, &cap->r.rNursery->blocks);
+        //dbl_link_onto(bd, &cap->r.rNursery->blocks);
+        dbl_link_onto(bd, &rc->nursery->blocks);
         cap->r.rCurrentAlloc = bd;
         rc->currentAlloc = bd;
         IF_DEBUG(sanity, checkNurserySanity(cap->r.rNursery));
@@ -1133,7 +1146,12 @@ W_ genLiveWords (generation *gen)
 
 W_ rcLiveWords (ResourceContainer *rc)
 {
-    return rc->n_words + rc->n_large_words;
+    W_ n_words = 0;
+    nat g;
+    for(g = 0; g < numGenerations; g++) {
+        n_words += rc->generations[g]->n_words;
+    }
+    return n_words + rc->n_large_words;
 }
 
 W_ genLiveBlocks (generation *gen)
@@ -1144,7 +1162,7 @@ W_ genLiveBlocks (generation *gen)
 
 W_ rcLiveBlocks (ResourceContainer *rc)
 {
-    return rc->n_blocks +rc->n_large_blocks;
+    return rc->used_blocks +rc->n_large_blocks;
 }
 
 W_ gcThreadLiveWords (nat i, nat g)

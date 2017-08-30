@@ -692,10 +692,15 @@ checkNurserySanity (nursery *nursery)
 static void
 checkRC(ResourceContainer *rc)
 {
-    ASSERT(countBlocks(rc->blocks) == rc->n_blocks);
+    nat g;
+    for(g = 0; g < numGenerations; g++) {
+        ASSERT(countBlocks(rc->generations[g]->blocks) == rc->generations[g]->n_blocks);
+    }
     ASSERT(countBlocks(rc->large_objects) == rc->n_large_blocks);
 
-    checkHeapChain(rc->blocks);
+    for(g = 0; g < numGenerations; g++) {
+        checkHeapChain(rc->generations[g]->blocks);
+    }
     checkLargeObjects(rc->large_objects);
 }
 
@@ -764,7 +769,7 @@ findMemoryLeak (void)
     nat g, i;
     for (g = 0; g < RtsFlags.GcFlags.generations; g++) {
         for (i = 0; i < n_capabilities; i++) {
-            markBlocks(capabilities[i]->mut_lists[g]);
+            //markBlocks(capabilities[i]->mut_lists[g]);
             //markBlocks(gc_threads[i]->gens[g].part_list);
             //markBlocks(gc_threads[i]->gens[g].scavd_list);
             //markBlocks(gc_threads[i]->gens[g].todo_bd);
@@ -777,9 +782,12 @@ findMemoryLeak (void)
 
     ResourceContainer *rc;
     for(rc = RC_LIST; rc != NULL; rc = rc->link) {
+        for(g = 0; g < numGenerations; g++) {
+            markBlocks(rc->mut_lists[g]);
+            markBlocks(rc->generations[g]->blocks);
+        }
         markBlocks(rc->nursery->blocks);
         markBlocks(rc->pinned_object_block);
-        markBlocks(rc->blocks);
         markBlocks(rc->large_objects);
     }
 
@@ -881,6 +889,8 @@ memInventory (rtsBool show)
 
           gen_blocks[g] += countBlocks(rc->gc_thread->gens[g].part_list);
           gen_blocks[g] += countBlocks(rc->gc_thread->gens[g].scavd_list);
+          gen_blocks[g] += countBlocks(rc->gc_thread->gens[g].todo_overflow);
+          gen_blocks[g] += countBlocks(rc->gc_thread->gens[g].todo_large_objects);
           gen_blocks[g] += countBlocks(rc->gc_thread->gens[g].todo_bd);
       }
       gen_blocks[g] += genBlocks(&generations[g]);

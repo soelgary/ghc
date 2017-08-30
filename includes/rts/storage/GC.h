@@ -116,10 +116,6 @@ typedef struct ResourceContainer_ {
   memcount       n_new_large_words;   // words of new large objects
                                       // (for doYouWantToGC())
 
-  bdescr *       blocks;              // blocks in this RC
-  memcount       n_blocks;            // number of blocks
-  memcount       n_words;             // number of used words
-
   bdescr *       free_blocks; // free blocks that can be used anywhere
                               // Allocation should not occur into any of these
                               // until they are moved into a nursery, large_obj,
@@ -138,7 +134,7 @@ typedef struct ResourceContainer_ {
 
   gc_thread *gc_thread;
 
-  generation *generations;
+  generation **generations;
 
 } ResourceContainer;
 
@@ -206,6 +202,10 @@ struct generation_ {
     bdescr *     old_blocks;            // bdescr of first from-space block
     memcount     n_old_blocks;         // number of blocks in from-space
     memcount     live_estimate;         // for sweeping: estimate of live data
+
+    bdescr *       blocks;              // blocks in this RC
+    memcount       n_blocks;            // number of blocks
+    memcount       n_words;             // number of used words
 
     bdescr *     scavenged_large_objects;  // live large objs after GC (d-link)
     memcount     n_scavenged_large_blocks; // size (not count) of above

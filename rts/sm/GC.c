@@ -142,20 +142,23 @@ DECLARE_GCT
    Static function declarations
    -------------------------------------------------------------------------- */
 
+static void mark_root_rc (void *user, StgClosure **root, ResourceContainer *rc, nat genNumber);
 static void mark_root               (void *user, StgClosure **root);
 static void prepare_collected_gen   (generation *gen);
+static void prepare_collected_gen_rc   (ResourceContainer *rc, nat genNumber);
 static void prepare_uncollected_gen (generation *gen);
 static void init_gc_thread          (gc_thread *t);
 static void resize_generations      (void);
 static void resize_nursery          (void);
 static void start_gc_threads        (void);
-static void scavenge_until_all_done (void);
+static void scavenge_until_all_done ( ResourceContainer *rc, gc_thread *gt);
 static StgWord inc_running          (void);
 static StgWord dec_running          (void);
 static void wakeup_gc_threads       (nat me);
 static void shutdown_gc_threads     (nat me);
 static void collect_gct_blocks      (void);
 static void collect_pinned_object_blocks (void);
+static void collect_pinned_object_blocks_rc (ResourceContainer *rc);
 
 #if defined(DEBUG)
 static void gcCAFs                  (void);
@@ -182,6 +185,13 @@ GarbageCollect (nat collect_gen,
                 ResourceContainer *rc)
 {
     debugTrace(DEBUG_gc, "Starting GC");
+    
+    nat g;
+
+    // USE THESE, NOT THE GLOBAL ONES
+    bdescr *mark_stack_top_bd_gc; // topmost block in the mark stack
+    bdescr *mark_stack_bd_gc;     // current block in the mark stack
+    StgPtr mark_sp_gc;            // pointer to the next unallocated mark stack entry
 
     N = collect_gen;
     major_gc = (N == 2);
@@ -193,11 +203,107 @@ GarbageCollect (nat collect_gen,
 
 #ifdef DEBUG
   // check for memory leaks if DEBUG is on
-  memInventory(DEBUG_gc);
+  // TODO: There is a memory leak that needs to be found
+  // memInventory(DEBUG_gc);
 #endif
 
     // do this *before* we start scavenging
-    collectFreshWeakPtrsRC();
+    collectFreshWeakPtrsRC(rc);
+
+    // check sanity *before* GC
+    IF_DEBUG(sanity, checkSanity(rtsFalse /* before GC */, major_gc));
+
+    // gather blocks allocated using allocatePinned() from each RC
+    // and put them on the rc->g0->large_object list.
+    collect_pinned_object_blocks();
+
+    // Initialise all the generations/steps that we're collecting.
+    for (g = 0; g < N; g++) {
+        prepare_collected_gen_rc(rc, g);
+    }
+
+    // Initialise all the generations/steps that we're *not* collecting.
+    // TODO: I dont think we want to do this. This could affect other RCs
+    //for (g = N+1; g < RtsFlags.GcFlags.generations; g++) {
+    //  prepare_uncollected_gen(&generations[g]);
+    //}
+
+    gc_thread *gt = rc->gc_thread;
+
+    // Prepare this gc_thread
+    init_gc_thread(gt);
+
+    /* Allocate a mark stack if we're doing a major collection.
+    */
+    if (major_gc && oldest_gen->mark) {
+        mark_stack_bd_gc         = allocBlockFor(rc);
+        mark_stack_top_bd_gc     = mark_stack_bd;
+        mark_stack_bd_gc->link   = NULL;
+        mark_stack_bd_gc->u.back = NULL;
+        mark_sp_gc               = mark_stack_bd->start;
+    } else {
+        mark_stack_bd_gc     = NULL;
+        mark_stack_top_bd_gc = NULL;
+        mark_sp_gc           = NULL;
+    }
+
+    /* -----------------------------------------------------------------------
+    * follow all the roots that we know about:
+    */
+
+    // the main thread is running: this prevents any other threads from
+    // exiting prematurely, so we can start them now.
+    // NB. do this after the mutable lists have been saved above, otherwise
+    // the other GC threads will be writing into the old mutable lists.
+    
+    traceEventGcWork(rc);
+
+    // mut lists can just be scavenged with no marking?
+    scavenge_rc_mut_lists(rc);
+    
+
+
+    // follow roots from the CAF list (used by GHCi)
+    gt->evac_gen_no = 0;
+    markCAFs(mark_root_rc, gt);
+
+    // Lets mark the roots of this RC
+    markRC(mark_root_rc, rc, rtsTrue);
+
+    // Do not mark scheduler here! It just follows the queues. This will
+    // leak information!
+    
+    // Do not mark signals! This is empty in a posix system anyway. Do we 
+    // want to support windows?
+
+    // 
+    markWeakPtrList(rc);
+    initWeakForGC(rc);
+
+    // Mark the stable pointer table.
+    markStableTables(mark_root_rc, gt);
+
+    /* -------------------------------------------------------------------------
+      * Repeatedly scavenge all the areas we know about until there's no
+      * more scavenging to be done.
+      */
+      for (;;)
+      {
+          scavenge_until_all_done(rc, gt);
+          // The other threads are now stopped.  We might recurse back to
+          // here, but from now on this is the only thread.
+    
+          // must be last...  invariant is that everything is fully
+          // scavenged at this point.
+          if (traverseWeakPtrList(rc)) { // returns rtsTrue if evaced something
+              inc_running();
+              continue;
+          }
+    
+          // If we get to here, there's really nothing left to do.
+          break;
+      }
+
 
     barf("GC not implemented yet");
 }
@@ -360,12 +466,12 @@ dec_running (void)
 }
 
 static rtsBool
-any_work (void)
+any_work (ResourceContainer *rc, gc_thread *gt)
 {
     int g;
     gen_workspace *ws;
 
-    gct->any_work++;
+    gt->any_work++;
 
     write_barrier();
 
@@ -378,7 +484,7 @@ any_work (void)
     // local work, because we have already exited scavenge_loop(),
     // which means there is no local work for this thread.
     for (g = 0; g < (int)RtsFlags.GcFlags.generations; g++) {
-        ws = &gct->gens[g];
+        ws = &gt->gens[g];
         if (ws->todo_large_objects) return rtsTrue;
         if (!looksEmptyWSDeque(ws->todo_q)) return rtsTrue;
         if (ws->todo_overflow) return rtsTrue;
@@ -389,16 +495,16 @@ any_work (void)
         nat n;
         // look for work to steal
         for (n = 0; n < n_gc_threads; n++) {
-            if (n == gct->thread_index) continue;
+            if (n == gt->thread_index) continue;
             for (g = RtsFlags.GcFlags.generations-1; g >= 0; g--) {
-                ws = &gc_threads[n]->gens[g];
+                // ws = &gc_threads[n]->gens[g];
                 if (!looksEmptyWSDeque(ws->todo_q)) return rtsTrue;
             }
         }
     }
 #endif
 
-    gct->no_work++;
+    gt->no_work++;
 #if defined(THREADED_RTS)
     yieldThread();
 #endif
@@ -407,7 +513,7 @@ any_work (void)
 }
 
 static void
-scavenge_until_all_done (void)
+scavenge_until_all_done (ResourceContainer *rc, gc_thread *gt)
 {
     DEBUG_ONLY( nat r );
 
@@ -415,12 +521,12 @@ scavenge_until_all_done (void)
 loop:
 #if defined(THREADED_RTS)
     if (n_gc_threads > 1) {
-        scavenge_loop();
+        scavenge_loop(rc, gt);
     } else {
-        scavenge_loop1();
+        scavenge_loop1(rc, gt);
     }
 #else
-    scavenge_loop();
+    scavenge_loop(rc, gt);
 #endif
 
     collect_gct_blocks();
@@ -428,9 +534,9 @@ loop:
     // scavenge_loop() only exits when there's no work to do
 
 #ifdef DEBUG
-    r = dec_running();
+    // r = dec_running();
 #else
-    dec_running();
+    // dec_running();
 #endif
 
     //traceEventGcIdle(gct->cap);
@@ -439,9 +545,9 @@ loop:
 
     while (gc_running_threads != 0) {
         // usleep(1);
-        if (any_work()) {
+        if (any_work(rc, gt)) {
             inc_running();
-            //traceEventGcWork(gct->cap);
+            //traceEventGcWork(gt->cap);
             goto loop;
         }
         // any_work() does not remove the work from the queue, it
@@ -450,7 +556,7 @@ loop:
         // scavenge_loop() to perform any pending work.
     }
 
-    //traceEventGcDone(gct->cap);
+    //traceEventGcDone(gt->cap);
 }
 
 #if defined(THREADED_RTS)
@@ -486,7 +592,7 @@ gcWorkerThread (Capability *cap)
     markCapability(mark_root, gct, cap, rtsTrue/*prune sparks*/);
     scavenge_capability_mut_lists(cap);
 
-    scavenge_until_all_done();
+    scavenge_until_all_done(cap->r.rCurrentTSO->rc, saved_gct);
 
 #ifdef THREADED_RTS
     // Now that the whole heap is marked, we discard any sparks that
@@ -626,6 +732,121 @@ releaseGCThreads (Capability *cap USED_IF_THREADS)
 /* ----------------------------------------------------------------------------
    Initialise a generation that is to be collected
    ------------------------------------------------------------------------- */
+
+static void
+prepare_collected_gen_rc(ResourceContainer *rc, nat genNumber)
+{
+    nat g;
+    gen_workspace *ws;
+    bdescr *bd, *next;
+
+    generation *gen = rc->generations[genNumber];
+
+    // Throw away the current mutable list.  Invariant: the mutable
+    // list always has at least one block; this means we can avoid a
+    // check for NULL in recordMutable().
+    g = gen->no;
+    debugTrace(DEBUG_gc, "Preparing to collect gen %d", g);
+    if (g != 0) {
+        freeChain(rc->mut_lists[g]);
+        rc->mut_lists[g] = allocBlock();
+    }
+
+    // we'll construct a new list of threads in this step
+    // during GC, throw away the current list.
+    gen->old_threads = gen->threads;
+    gen->threads = END_TSO_QUEUE;
+
+    // deprecate the existing blocks
+    gen->old_blocks   = gen->blocks;
+    gen->n_old_blocks = gen->n_blocks;
+    gen->blocks       = NULL;
+    gen->n_blocks     = 0;
+    gen->n_words      = 0;
+    gen->live_estimate = 0;
+
+    // initialise the large object queues.
+    ASSERT(gen->scavenged_large_objects == NULL);
+    ASSERT(gen->n_scavenged_large_blocks == 0);
+
+    // grab all the partial blocks stashed in the gc_thread workspaces and
+    // move them to the old_blocks list of this gen.
+    ws = &rc->gc_thread->gens[genNumber];
+
+    for(bd = ws->part_list; bd != NULL; bd = next) {
+        next = bd->link;
+        bd->link = gen->old_blocks;
+        gen->old_blocks = bd;
+        gen->n_old_blocks += bd->blocks;
+    }
+    ws->part_list = NULL;
+    ws->n_part_blocks = 0;
+    ws->n_part_words = 0;
+
+    ASSERT(ws->scavd_list == NULL);
+    ASSERT(ws->n_scavd_blocks == 0);
+    ASSERT(ws->n_scavd_words == 0);
+
+    if (ws->todo_free != ws->todo_bd->start) {
+        ws->todo_bd->free = ws->todo_free;
+        ws->todo_bd->link = gen->old_blocks;
+        gen->old_blocks = ws->todo_bd;
+        gen->n_old_blocks += ws->todo_bd->blocks;
+        alloc_todo_block(ws,0); // always has one block.
+    }
+
+    // mark the small objects as from-space
+    for (bd = gen->old_blocks; bd; bd = bd->link) {
+        bd->flags &= ~BF_EVACUATED;
+    }
+
+    // mark the large objects as from-space
+    for (bd = rc->large_objects; bd; bd = bd->link) {
+        bd->flags &= ~BF_EVACUATED;
+    }
+
+    // for a compacted generation, we need to allocate the bitmap
+    if(gen->mark) {
+        StgWord bitmap_size;
+        bdescr *bitmap_bdescr;
+        StgWord *bitmap;
+
+        bitmap_size = gen->n_old_blocks * BLOCK_SIZE / (sizeof(W_)*BITS_PER_BYTE);
+
+        if (bitmap_size > 0) {
+            bitmap_bdescr = allocGroupFor((StgWord)BLOCK_ROUND_UP(bitmap_size)
+                                       / BLOCK_SIZE, rc);
+            gen->bitmap = bitmap_bdescr;
+            bitmap = bitmap_bdescr->start;
+
+            debugTrace(DEBUG_gc, "bitmap_size: %d, bitmap: %p",
+                       bitmap_size, bitmap);
+            
+            // don't forget to fill it with zeros!
+            memset(bitmap, 0, bitmap_size);
+
+            // For each block in this step, point to its bitmap from the
+            // block descriptor.
+            for (bd=gen->old_blocks; bd != NULL; bd = bd->link) {
+                bd->u.bitmap = bitmap;
+                bitmap += BLOCK_SIZE_W / (sizeof(W_)*BITS_PER_BYTE);
+
+                // Also at this point we set the BF_MARKED flag
+                // for this block.  The invariant is that
+                // BF_MARKED is always unset, except during GC
+                // when it is set on those blocks which will be
+                // compacted.
+                if (!(bd->flags & BF_FRAGMENTED)) {
+                    bd->flags |= BF_MARKED;
+                }
+
+                // BF_SWEPT should be marked only for blocks that are being
+                // collected in sweep()
+                bd->flags &= ~BF_SWEPT;
+            }
+        }
+    }
+}
 
 static void
 prepare_collected_gen (generation *gen)
@@ -844,29 +1065,54 @@ collect_gct_blocks (void)
    -------------------------------------------------------------------------- */
 
 static void
+collect_pinned_object_blocks_rc(ResourceContainer *rc)
+{
+    bdescr *prev, *bd;
+
+    prev = NULL;
+
+    for (bd = rc->pinned_object_blocks; bd != NULL; bd = bd->link) {
+        prev = bd;
+    }
+
+    if (prev != NULL) {
+        prev->link = rc->large_objects;
+        if(rc->large_objects != NULL) {
+            rc->large_objects->u.back = prev;
+        }
+        rc->large_objects = rc->pinned_object_blocks;
+        rc->pinned_object_blocks = NULL;
+    }
+}
+
+
+static void
 collect_pinned_object_blocks (void)
 {
     // TODO: This needs to be fixed! pinned objects belong to RCs, not capabilities!
+    /*
     nat n;
     bdescr *bd, *prev;
 
     for (n = 0; n < n_capabilities; n++) {
         prev = NULL;
         // TODO: This needs to know which RC is being collected!
-        //for (bd = capabilities[n]->pinned_object_blocks; bd != NULL; bd = bd->link) {
-        //    prev = bd;
-        //}
+        for (bd = capabilities[n]->pinned_object_blocks; bd != NULL; bd = bd->link) {
+            prev = bd;
+        }
         if (prev != NULL) {
             // TODO: Same as above
-            //prev->link = g0->large_objects;
-            //if (g0->large_objects != NULL) {
-            //    g0->large_objects->u.back = prev;
-            //}
-            //g0->large_objects = capabilities[n]->pinned_object_blocks;
-            //capabilities[n]->pinned_object_blocks = 0;
+            prev->link = g0->large_objects;
+            if (g0->large_objects != NULL) {
+                g0->large_objects->u.back = prev;
+            }
+            g0->large_objects = capabilities[n]->pinned_object_blocks;
+            capabilities[n]->pinned_object_blocks = 0;
         }
     }
+    */
 }
+
 
 /* -----------------------------------------------------------------------------
    Initialise a gc_thread before GC
@@ -875,10 +1121,10 @@ collect_pinned_object_blocks (void)
 static void
 init_gc_thread (gc_thread *t)
 {
-    /*t->static_objects = END_OF_STATIC_OBJECT_LIST;
+    t->static_objects = END_OF_STATIC_OBJECT_LIST;
     t->scavenged_static_objects = END_OF_STATIC_OBJECT_LIST;
     t->scan_bd = NULL;
-    t->mut_lists = t->cap->mut_lists;
+    t->mut_lists = t->rc->mut_lists;
     t->evac_gen_no = 0;
     t->failed_to_evac = rtsFalse;
     t->eager_promotion = rtsTrue;
@@ -887,7 +1133,7 @@ init_gc_thread (gc_thread *t)
     t->scanned = 0;
     t->any_work = 0;
     t->no_work = 0;
-    t->scav_find_work = 0;*/
+    t->scav_find_work = 0;
 }
 
 /* -----------------------------------------------------------------------------
@@ -911,6 +1157,15 @@ mark_root(void *user USED_IF_THREADS, StgClosure **root)
     evacuate(root);
 
     SET_GCT(saved_gct);
+}
+
+static void
+mark_root_rc(void *user USED_IF_THREADS,
+             StgClosure **root,
+             ResourceContainer *rc,
+             nat genNumber)
+{
+    evacuate_rc(root, rc);
 }
 
 /* ----------------------------------------------------------------------------

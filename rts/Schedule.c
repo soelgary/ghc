@@ -143,7 +143,7 @@ static void scheduleHandleThreadBlocked( StgTSO *t );
 static rtsBool scheduleHandleThreadFinished( Capability *cap, Task *task,
                                              StgTSO *t );
 static rtsBool scheduleNeedHeapProfile(rtsBool ready_to_gc);
-static void scheduleDoGC(Capability **pcap, Task *task, rtsBool force_major);
+static void scheduleDoGC(Capability **pcap, Task *task, rtsBool force_major, ResourceContainer *rc);
 
 static void deleteThread (Capability *cap, StgTSO *tso);
 static void deleteAllThreads (Capability *cap);
@@ -244,7 +244,7 @@ schedule (Capability *initialCapability, Task *task)
     case SCHED_INTERRUPTING:
         debugTrace(DEBUG_sched, "SCHED_INTERRUPTING");
         /* scheduleDoGC() deletes all the threads */
-        scheduleDoGC(&cap,task,rtsTrue);
+        scheduleDoGC(&cap,task,rtsTrue,cap->r.rCurrentTSO->rc);
 
         // after scheduleDoGC(), we must be shutting down.  Either some
         // other Capability did the final GC, or we did it above,
@@ -313,12 +313,14 @@ schedule (Capability *initialCapability, Task *task)
     rc = t->rc;
 
     // Set registers for the capability for this rc
-    cap->r.rCurrentNursery = rc->nursery->blocks;
     cap->r.rCurrentAlloc = rc->currentAlloc;
+    /* FIXME
+    cap->r.rCurrentNursery = rc->nursery->blocks;
     cap->r.rNursery = rc->nursery;
     cap->mut_lists = rc->mut_lists;
     cap->weak_ptr_list_hd = rc->weak_ptr_list_hd;
     cap->weak_ptr_list_tl = rc->weak_ptr_list_tl;
+    */
     // End set registers
 
     // Sanity check the thread we're about to run.  This can be
@@ -467,6 +469,7 @@ run_thread:
         r = StgRun((StgFunPtr) stg_returnToStackTop, &cap->r);
         cap = regTableToCapability(r);
         ret = r->rRet;
+        // FIXME
         rc->currentAlloc = cap->r.rCurrentAlloc;
         break;
     }
@@ -560,7 +563,7 @@ run_thread:
     }
 
     if (ready_to_gc || scheduleNeedHeapProfile(ready_to_gc)) {
-      scheduleDoGC(&cap,task,rtsFalse);
+      scheduleDoGC(&cap,task,rtsFalse,t->rc);
     }
   } /* end of while() */
 }
@@ -929,7 +932,7 @@ scheduleDetectDeadlock (Capability **pcap, Task *task)
         // they are unreachable and will therefore be sent an
         // exception.  Any threads thus released will be immediately
         // runnable.
-        scheduleDoGC (pcap, task, rtsTrue/*force major GC*/);
+        scheduleDoGC (pcap, task, rtsTrue/*force major GC*/, cap->r.rCurrentTSO->rc);
         cap = *pcap;
         // when force_major == rtsTrue. scheduleDoGC sets
         // recent_activity to ACTIVITY_DONE_GC and turns off the timer
@@ -998,7 +1001,7 @@ scheduleProcessInbox (Capability **pcap USED_IF_THREADS)
     while (!emptyInbox(cap)) {
         if (cap->r.rCurrentNursery->link == NULL ||
             g0->n_new_large_words >= large_alloc_lim) {
-            scheduleDoGC(pcap, cap->running_task, rtsFalse);
+            scheduleDoGC(pcap, cap->running_task, rtsFalse, cap->r.rCurrentTSO->rc);
             cap = *pcap;
         }
 
@@ -1184,7 +1187,9 @@ scheduleHandleHeapOverflow( Capability *cap, StgTSO *t )
 
     // Otherwise, we just ran out of space in the current nursery.
     // Grab another nursery if we can.
-    if (addBlockToNursery(t->rc, cap->r.rCurrentNursery)) {
+    //if (addBlockToNursery(t->rc, cap->r.rCurrentNursery)) {
+    if (addBlockToNursery(t->rc, t->rc->nursery->blocks)) {
+        cap->r.rCurrentAlloc = t->rc->currentAlloc;
         debugTrace(DEBUG_gc, "thread %ld got a new block", t->id);
         return rtsFalse;
     } else {
@@ -1523,7 +1528,7 @@ static void releaseAllCapabilities(nat n, Capability *cap, Task *task)
 
 static void
 scheduleDoGC (Capability **pcap, Task *task USED_IF_THREADS,
-              rtsBool force_major)
+              rtsBool force_major, ResourceContainer *rc)
 {
     Capability *cap = *pcap;
     rtsBool heap_census;
@@ -1816,9 +1821,9 @@ delete_threads_and_gc:
     // reset pending_sync *before* GC, so that when the GC threads
     // emerge they don't immediately re-enter the GC.
     pending_sync = 0;
-    GarbageCollect(collect_gen, heap_census, gc_type, cap);
+    GarbageCollect(collect_gen, heap_census, gc_type, rc);
 #else
-    GarbageCollect(collect_gen, heap_census, 0, cap);
+    GarbageCollect(collect_gen, heap_census, 0, rc);
 #endif
 
     traceSparkCounters(cap);
@@ -2633,7 +2638,7 @@ exitScheduler (rtsBool wait_foreign USED_IF_THREADS)
         sched_state = SCHED_INTERRUPTING;
         Capability *cap = task->cap;
         waitForCapability(&cap,task);
-        scheduleDoGC(&cap,task,rtsTrue);
+        scheduleDoGC(&cap,task,rtsTrue, NULL);
         ASSERT(task->incall->tso == NULL);
         releaseCapability(cap);
     }
@@ -2700,7 +2705,7 @@ performGC_(rtsBool force_major)
     // TODO: do we need to traceTask*() here?
 
     waitForCapability(&cap,task);
-    scheduleDoGC(&cap,task,force_major);
+    scheduleDoGC(&cap,task,force_major,cap->r.rCurrentTSO->rc);
     releaseCapability(cap);
     boundTaskExiting(task);
 }
