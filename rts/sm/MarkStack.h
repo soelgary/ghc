@@ -17,7 +17,7 @@
 #include "BeginPrivate.h"
 
 INLINE_HEADER void
-push_mark_stack(StgPtr p)
+push_mark_stack(StgPtr p, bdescr *mark_stack_bd, bdescr *mark_stack_top_bd, StgPtr mark_sp)
 {
     bdescr *bd;
 
@@ -43,7 +43,7 @@ push_mark_stack(StgPtr p)
 }
 
 INLINE_HEADER StgPtr
-pop_mark_stack(void)
+pop_mark_stack(bdescr *mark_stack_bd, StgPtr mark_sp)
 {
     if (((W_)mark_sp & BLOCK_MASK) == 0)
     {
@@ -61,7 +61,7 @@ pop_mark_stack(void)
 }
 
 INLINE_HEADER rtsBool
-mark_stack_empty(void)
+mark_stack_empty(bdescr *mark_stack_bd, StgPtr mark_sp)
 {
     return (((W_)mark_sp & BLOCK_MASK) == 0 && mark_stack_bd->link == NULL);
 }

@@ -142,7 +142,9 @@ DECLARE_GCT
    Static function declarations
    -------------------------------------------------------------------------- */
 
-static void mark_root_rc (void *user, StgClosure **root, ResourceContainer *rc, nat genNumber);
+static void mark_root_rc (void *user, StgClosure **root, ResourceContainer *rc,
+                          nat genNumber,  bdescr *mark_stack_bd,
+                          bdescr *mark_stack_top_bd, StgPtr mark_sp);
 static void mark_root               (void *user, StgClosure **root);
 static void prepare_collected_gen   (generation *gen);
 static void prepare_collected_gen_rc   (ResourceContainer *rc, nat genNumber);
@@ -151,26 +153,21 @@ static void init_gc_thread          (gc_thread *t);
 static void resize_generations      (void);
 static void resize_nursery          (void);
 static void start_gc_threads        (void);
-static void scavenge_until_all_done ( ResourceContainer *rc, gc_thread *gt);
+static void scavenge_until_all_done (void);
+static void scavenge_until_all_done_rc (ResourceContainer *rc, gc_thread *gt,
+                                        bdescr *mark_stack_bd, StgPtr mark_sp);
 static StgWord inc_running          (void);
 static StgWord dec_running          (void);
 static void wakeup_gc_threads       (nat me);
 static void shutdown_gc_threads     (nat me);
 static void collect_gct_blocks      (void);
+static void collect_gct_blocks_rc   (ResourceContainer *rc);
 static void collect_pinned_object_blocks (void);
 static void collect_pinned_object_blocks_rc (ResourceContainer *rc);
 
 #if defined(DEBUG)
 static void gcCAFs                  (void);
 #endif
-
-/* -----------------------------------------------------------------------------
-   The mark stack.
-   -------------------------------------------------------------------------- */
-
-bdescr *mark_stack_top_bd; // topmost block in the mark stack
-bdescr *mark_stack_bd;     // current block in the mark stack
-StgPtr mark_sp;            // pointer to the next unallocated mark stack entry
 
 /* -----------------------------------------------------------------------------
    GarbageCollect: the main entry point to the garbage collector.
@@ -189,9 +186,9 @@ GarbageCollect (nat collect_gen,
     nat g;
 
     // USE THESE, NOT THE GLOBAL ONES
-    bdescr *mark_stack_top_bd_gc; // topmost block in the mark stack
-    bdescr *mark_stack_bd_gc;     // current block in the mark stack
-    StgPtr mark_sp_gc;            // pointer to the next unallocated mark stack entry
+    bdescr *mark_stack_top_bd; // topmost block in the mark stack
+    bdescr *mark_stack_bd;     // current block in the mark stack
+    StgPtr mark_sp;            // pointer to the next unallocated mark stack entry
 
     N = collect_gen;
     major_gc = (N == 2);
@@ -236,15 +233,15 @@ GarbageCollect (nat collect_gen,
     /* Allocate a mark stack if we're doing a major collection.
     */
     if (major_gc && oldest_gen->mark) {
-        mark_stack_bd_gc         = allocBlockFor(rc);
-        mark_stack_top_bd_gc     = mark_stack_bd;
-        mark_stack_bd_gc->link   = NULL;
-        mark_stack_bd_gc->u.back = NULL;
-        mark_sp_gc               = mark_stack_bd->start;
+        mark_stack_bd         = allocBlockFor(rc);
+        mark_stack_top_bd     = mark_stack_bd;
+        mark_stack_bd->link   = NULL;
+        mark_stack_bd->u.back = NULL;
+        mark_sp               = mark_stack_bd->start;
     } else {
-        mark_stack_bd_gc     = NULL;
-        mark_stack_top_bd_gc = NULL;
-        mark_sp_gc           = NULL;
+        mark_stack_bd     = NULL;
+        mark_stack_top_bd = NULL;
+        mark_sp           = NULL;
     }
 
     /* -----------------------------------------------------------------------
@@ -277,7 +274,7 @@ GarbageCollect (nat collect_gen,
     // want to support windows?
 
     // 
-    markWeakPtrList(rc);
+    markWeakPtrList(rc, mark_stack_bd, mark_stack_top_bd, mark_sp);
     initWeakForGC(rc);
 
     // Mark the stable pointer table.
@@ -289,7 +286,7 @@ GarbageCollect (nat collect_gen,
       */
       for (;;)
       {
-          scavenge_until_all_done(rc, gt);
+          scavenge_until_all_done_rc(rc, gt, mark_stack_bd, mark_sp);
           // The other threads are now stopped.  We might recurse back to
           // here, but from now on this is the only thread.
     
@@ -466,7 +463,7 @@ dec_running (void)
 }
 
 static rtsBool
-any_work (ResourceContainer *rc, gc_thread *gt)
+any_work (ResourceContainer *rc, gc_thread *gt, bdescr *mark_stack_bd, StgPtr mark_sp)
 {
     int g;
     gen_workspace *ws;
@@ -476,7 +473,7 @@ any_work (ResourceContainer *rc, gc_thread *gt)
     write_barrier();
 
     // scavenge objects in compacted generation
-    if (mark_stack_bd != NULL && !mark_stack_empty()) {
+    if (mark_stack_bd != NULL && !mark_stack_empty(mark_stack_bd, mark_sp)) {
         return rtsTrue;
     }
 
@@ -513,7 +510,13 @@ any_work (ResourceContainer *rc, gc_thread *gt)
 }
 
 static void
-scavenge_until_all_done (ResourceContainer *rc, gc_thread *gt)
+scavenge_until_all_done (void)
+{
+    barf("Use the new scavenge_until_all_done_rc function instead!");
+}
+
+static void
+scavenge_until_all_done_rc (ResourceContainer *rc, gc_thread *gt, bdescr *mark_stack_bd, StgPtr mark_sp)
 {
     DEBUG_ONLY( nat r );
 
@@ -521,15 +524,15 @@ scavenge_until_all_done (ResourceContainer *rc, gc_thread *gt)
 loop:
 #if defined(THREADED_RTS)
     if (n_gc_threads > 1) {
-        scavenge_loop(rc, gt);
+        scavenge_loop(rc, gt, mark_stack_bd, mark_sp);
     } else {
-        scavenge_loop1(rc, gt);
+        scavenge_loop1(rc, gt, mark_stack_bd, mark_sp);
     }
 #else
-    scavenge_loop(rc, gt);
+    scavenge_loop(rc, gt, mark_stack_bd, mark_sp);
 #endif
 
-    collect_gct_blocks();
+    collect_gct_blocks_rc(rc);
 
     // scavenge_loop() only exits when there's no work to do
 
@@ -541,11 +544,14 @@ loop:
 
     //traceEventGcIdle(gct->cap);
 
+    /*
+    TODO RC: I dont think we want to do any of this.. We dont want to find
+             work since we are working on an independant heap
     debugTrace(DEBUG_gc, "%d GC threads still running", r);
 
     while (gc_running_threads != 0) {
         // usleep(1);
-        if (any_work(rc, gt)) {
+        if (any_work(rc, gt, mark_stack_bd, mark_sp)) {
             inc_running();
             //traceEventGcWork(gt->cap);
             goto loop;
@@ -555,6 +561,7 @@ loop:
         // then we increment gc_running_threads and go back to
         // scavenge_loop() to perform any pending work.
     }
+    */
 
     //traceEventGcDone(gt->cap);
 }
@@ -592,7 +599,8 @@ gcWorkerThread (Capability *cap)
     markCapability(mark_root, gct, cap, rtsTrue/*prune sparks*/);
     scavenge_capability_mut_lists(cap);
 
-    scavenge_until_all_done(cap->r.rCurrentTSO->rc, saved_gct);
+    // TODO RC -- fix mark stack here
+    scavenge_until_all_done_rc(cap->r.rCurrentTSO->rc, saved_gct, NULL, NULL);
 
 #ifdef THREADED_RTS
     // Now that the whole heap is marked, we discard any sparks that
@@ -1011,18 +1019,21 @@ prepare_uncollected_gen (generation *gen)
    Collect the completed blocks from a GC thread and attach them to
    the generation.
    -------------------------------------------------------------------------- */
-
 static void
 collect_gct_blocks (void)
+{ 
+  barf("Use collect_gct_blocks_rc now");
+}
+
+static void
+collect_gct_blocks_rc (ResourceContainer *rc)
 {
-    // TODO: Need to collect gc_threads for RCs, not generations!
-    /*
     nat g;
     gen_workspace *ws;
     bdescr *bd, *prev;
 
     for (g = 0; g < RtsFlags.GcFlags.generations; g++) {
-        ws = &gct->gens[g];
+        ws = rc->generations[g];
 
         // there may still be a block attached to ws->todo_bd;
         // leave it there to use next time.
@@ -1051,7 +1062,6 @@ collect_gct_blocks (void)
             RELEASE_SPIN_LOCK(&ws->gen->sync);
         }
     }
-    */
 }
 
 /* -----------------------------------------------------------------------------
@@ -1160,12 +1170,11 @@ mark_root(void *user USED_IF_THREADS, StgClosure **root)
 }
 
 static void
-mark_root_rc(void *user USED_IF_THREADS,
-             StgClosure **root,
-             ResourceContainer *rc,
-             nat genNumber)
+mark_root_rc(void *user USED_IF_THREADS, StgClosure **root,
+             ResourceContainer *rc, nat genNumber, bdescr *mark_stack_bd,
+             bdescr *mark_stack_top_bd, StgPtr mark_sp)
 {
-    evacuate_rc(root, rc);
+    evacuate_rc(root, rc, mark_stack_bd, mark_stack_top_bd, mark_sp);
 }
 
 /* ----------------------------------------------------------------------------

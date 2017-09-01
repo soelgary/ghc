@@ -38,7 +38,7 @@ static void scavenge_large_bitmap (StgPtr p,
 
 #if defined(THREADED_RTS) && !defined(PARALLEL_GC)
 # define evacuate(a) evacuate1(a)
-# define scavenge_loop(rc,a) scavenge_loop1(rc,a)
+# define scavenge_loop(rc,a,ms,sp) scavenge_loop1(rc,a,ms,sp)
 # define scavenge_block(rc,a) scavenge_block1(rc,a)
 # define scavenge_mutable_list(bd,g,gt) scavenge_mutable_list1(bd,g,gt)
 # define scavenge_capability_mut_lists(cap) scavenge_capability_mut_Lists1(cap)
@@ -848,7 +848,7 @@ scavenge_block (ResourceContainer *rc, bdescr *bd)
    -------------------------------------------------------------------------- */
 
 static void
-scavenge_mark_stack(void)
+scavenge_mark_stack(bdescr *mark_stack_bd, StgPtr mark_sp)
 {
     StgPtr p, q;
     StgInfoTable *info;
@@ -857,7 +857,7 @@ scavenge_mark_stack(void)
     gct->evac_gen_no = oldest_gen->no;
     saved_eager_promotion = gct->eager_promotion;
 
-    while ((p = pop_mark_stack())) {
+    while ((p = pop_mark_stack(mark_stack_bd, mark_sp))) {
 
         ASSERT(LOOKS_LIKE_CLOSURE_PTR(p));
         info = get_itbl((StgClosure *)p);
@@ -2099,7 +2099,7 @@ loop:
    ------------------------------------------------------------------------- */
 
 void
-scavenge_loop(ResourceContainer *rc, gc_thread *gt)
+scavenge_loop(ResourceContainer *rc, gc_thread *gt, bdescr *mark_stack_bd, StgPtr mark_sp)
 {
     rtsBool work_to_do;
 
@@ -2113,8 +2113,8 @@ loop:
     }
 
     // scavenge objects in compacted generation
-    if (mark_stack_bd != NULL && !mark_stack_empty()) {
-        scavenge_mark_stack();
+    if (mark_stack_bd != NULL && !mark_stack_empty(mark_stack_bd, mark_sp)) {
+        scavenge_mark_stack(mark_stack_bd, mark_sp);
         work_to_do = rtsTrue;
     }
 

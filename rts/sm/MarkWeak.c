@@ -401,7 +401,8 @@ collectFreshWeakPtrsRC(ResourceContainer *rc)
    -------------------------------------------------------------------------- */
 
 void
-markWeakPtrList ( ResourceContainer *rc )
+markWeakPtrList (ResourceContainer *rc, bdescr *mark_stack_bd,
+                 bdescr *mark_stack_top_bd, StgPtr mark_sp)
 {
     nat g;
 
@@ -424,7 +425,7 @@ markWeakPtrList ( ResourceContainer *rc )
             }
 #endif
 
-            evacuate_rc((StgClosure **)last_w, rc);
+            evacuate_rc((StgClosure **)last_w, rc, mark_stack_bd, mark_stack_top_bd, mark_sp);
             w = *last_w;
             if (w->header.info == &stg_DEAD_WEAK_info) {
                 last_w = &(w->link);

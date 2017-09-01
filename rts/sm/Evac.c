@@ -32,7 +32,7 @@ StgWord64 whitehole_spin = 0;
 
 #if defined(THREADED_RTS) && !defined(PARALLEL_GC)
 #define evacuate(p) evacuate1(p)
-#define evacuate_rc(p,rc) evacuate_rc1(p,rc)
+#define evacuate_rc(p,rc,m,mt,ms) evacuate_rc1(p,rc,m,mt,ms)
 #define HEAP_ALLOCED_GC(p) HEAP_ALLOCED(p)
 #endif
 
@@ -405,7 +405,7 @@ evacuate(StgClosure **p)
 
 
 REGPARM1 GNUC_ATTR_HOT void
-evacuate_rc(StgClosure **p, ResourceContainer *rc)
+evacuate_rc(StgClosure **p, ResourceContainer *rc, bdescr *mark_stack_bd, bdescr *mark_stack_top_bd, StgPtr mark_sp)
 {
   bdescr *bd = NULL;
   nat gen_no;
@@ -499,7 +499,7 @@ loop:
        */
       if (!is_marked((P_)q,bd)) {
           mark((P_)q,bd);
-          push_mark_stack((P_)q);
+          push_mark_stack((P_)q, mark_stack_bd, mark_stack_top_bd, mark_sp);
       }
       return;
   }
