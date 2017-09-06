@@ -15,19 +15,7 @@
 
 /* typedef for SparkPool in RtsTypes.h */
 
-/* Stats on spark creation/conversion */
-typedef struct {
-    StgWord created;
-    StgWord dud;
-    StgWord overflowed;
-    StgWord converted;
-    StgWord gcd;
-    StgWord fizzled;
-} SparkCounters;
-
 #if defined(THREADED_RTS)
-
-typedef WSDeque SparkPool;
 
 // Initialisation
 SparkPool *allocSparkPool (void);

@@ -58,19 +58,20 @@ StgInt
 newSpark (StgRegTable *reg, StgClosure *p)
 {
     Capability *cap = regTableToCapability(reg);
-    SparkPool *pool = cap->sparks;
+    ResourceContainer *rc = cap->r.rCurrentTSO->rc;
+    SparkPool *pool = rc->sparks;
 
     if (!fizzledSpark(p)) {
         if (pushWSDeque(pool,p)) {
-            cap->spark_stats.created++;
+            rc->spark_stats.created++;
             traceEventSparkCreate(cap);
         } else {
             /* overflowing the spark pool */
-            cap->spark_stats.overflowed++;
+            rc->spark_stats.overflowed++;
             traceEventSparkOverflow(cap);
         }
     } else {
-        cap->spark_stats.dud++;
+        rc->spark_stats.dud++;
         traceEventSparkDud(cap);
     }
 
@@ -92,11 +93,12 @@ pruneSparkQueue (Capability *cap)
     nat n, pruned_sparks; // stats only
     StgWord botInd,oldBotInd,currInd; // indices in array (always < size)
     const StgInfoTable *info;
+    ResourceContainer *rc = cap->r.rCurrentTSO->rc;
 
     n = 0;
     pruned_sparks = 0;
 
-    pool = cap->sparks;
+    pool = rc->sparks;
 
     // it is possible that top > bottom, indicating an empty pool.  We
     // fix that here; this is only necessary because the loop below
@@ -177,7 +179,7 @@ pruneSparkQueue (Capability *cap)
           // evaluated, but it doesn't hurt to have this check for
           // robustness.
           pruned_sparks++;
-          cap->spark_stats.fizzled++;
+          rc->spark_stats.fizzled++;
           traceEventSparkFizzle(cap);
       } else {
           info = spark->header.info;
@@ -190,7 +192,7 @@ pruneSparkQueue (Capability *cap)
                   n++;
               } else {
                   pruned_sparks++; // discard spark
-                  cap->spark_stats.fizzled++;
+                  rc->spark_stats.fizzled++;
                   traceEventSparkFizzle(cap);
               }
           } else if (HEAP_ALLOCED(spark)) {
@@ -201,12 +203,12 @@ pruneSparkQueue (Capability *cap)
                       n++;
                   } else {
                       pruned_sparks++; // discard spark
-                      cap->spark_stats.fizzled++;
+                      rc->spark_stats.fizzled++;
                       traceEventSparkFizzle(cap);
                   }
               } else {
                   pruned_sparks++; // discard spark
-                  cap->spark_stats.gcd++;
+                  rc->spark_stats.gcd++;
                   traceEventSparkGC(cap);
               }
           } else {
@@ -219,7 +221,7 @@ pruneSparkQueue (Capability *cap)
                   n++;
               } else {
                   pruned_sparks++; // discard spark
-                  cap->spark_stats.fizzled++;
+                  rc->spark_stats.fizzled++;
                   traceEventSparkFizzle(cap);
               }
           }
@@ -260,7 +262,9 @@ traverseSparkQueue (evac_fn evac, void *user, Capability *cap)
     SparkPool *pool;
     StgWord top,bottom, modMask;
 
-    pool = cap->sparks;
+    ResourceContainer *rc = cap->r.rCurrentTSO->rc;
+
+    pool = rc->sparks;
 
     ASSERT_WSDEQUE_INVARIANTS(pool);
 

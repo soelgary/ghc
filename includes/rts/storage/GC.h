@@ -61,6 +61,48 @@
 
 typedef StgWord memcount;
 
+typedef struct WSDeque_ {
+  // Size of elements array. Used for modulo calculation: we round up
+  // to powers of 2 and use the dyadic log (modulo == bitwise &)
+  StgWord size;
+  StgWord moduloSize; /* bitmask for modulo */
+
+  // top, index where multiple readers steal() (protected by a cas)
+  volatile StgWord top;
+
+  // bottom, index of next free place where one writer can push
+  // elements. This happens unsynchronised.
+  volatile StgWord bottom;
+
+  // both top and bottom are continuously incremented, and used as
+  // an index modulo the current array size.
+
+  // lower bound on the current top value. This is an internal
+  // optimisation to avoid unnecessarily accessing the top field
+  // inside pushBottom
+  volatile StgWord topBound;
+
+  // The elements array
+  void ** elements;
+
+  //  Please note: the dataspace cannot follow the admin fields
+  //  immediately, as it should be possible to enlarge it without
+  //  disposing the old one automatically (as realloc would)!
+
+} WSDeque;
+
+/* Stats on spark creation/conversion */
+typedef struct {
+  StgWord created;
+  StgWord dud;
+  StgWord overflowed;
+  StgWord converted;
+  StgWord gcd;
+  StgWord fizzled;
+} SparkCounters;
+
+typedef WSDeque SparkPool;
+
 typedef struct nursery_ nursery;
 
 typedef struct gen_workspace_ gen_workspace;
@@ -135,6 +177,12 @@ typedef struct ResourceContainer_ {
   gc_thread *gc_thread;
 
   generation **generations;
+
+  // Sparks are a part of RCs now!
+  SparkPool *sparks;
+  
+  // Stats on spark creation/conversion
+  SparkCounters spark_stats;
 
 } ResourceContainer;
 

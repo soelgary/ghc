@@ -83,109 +83,6 @@ globalWorkToDo (void)
 }
 #endif
 
-#if defined(THREADED_RTS)
-StgClosure *
-findSpark (Capability *cap)
-{
-  Capability *robbed;
-  StgClosurePtr spark;
-  rtsBool retry;
-  nat i = 0;
-
-  if (!emptyRunQueue(cap) || cap->n_returning_tasks != 0) {
-      // If there are other threads, don't try to run any new
-      // sparks: sparks might be speculative, we don't want to take
-      // resources away from the main computation.
-      return 0;
-  }
-
-  do {
-      retry = rtsFalse;
-
-      // first try to get a spark from our own pool.
-      // We should be using reclaimSpark(), because it works without
-      // needing any atomic instructions:
-      //   spark = reclaimSpark(cap->sparks);
-      // However, measurements show that this makes at least one benchmark
-      // slower (prsa) and doesn't affect the others.
-      spark = tryStealSpark(cap->sparks);
-      while (spark != NULL && fizzledSpark(spark)) {
-          cap->spark_stats.fizzled++;
-          traceEventSparkFizzle(cap);
-          spark = tryStealSpark(cap->sparks);
-      }
-      if (spark != NULL) {
-          cap->spark_stats.converted++;
-
-          // Post event for running a spark from capability's own pool.
-          traceEventSparkRun(cap);
-
-          return spark;
-      }
-      if (!emptySparkPoolCap(cap)) {
-          retry = rtsTrue;
-      }
-
-      if (n_capabilities == 1) { return NULL; } // makes no sense...
-
-      debugTrace(DEBUG_sched,
-                 "cap %d: Trying to steal work from other capabilities",
-                 cap->no);
-
-      /* visit cap.s 0..n-1 in sequence until a theft succeeds. We could
-      start at a random place instead of 0 as well.  */
-      for ( i=0 ; i < n_capabilities ; i++ ) {
-          robbed = capabilities[i];
-          if (cap == robbed)  // ourselves...
-              continue;
-
-          if (emptySparkPoolCap(robbed)) // nothing to steal here
-              continue;
-
-          spark = tryStealSpark(robbed->sparks);
-          while (spark != NULL && fizzledSpark(spark)) {
-              cap->spark_stats.fizzled++;
-              traceEventSparkFizzle(cap);
-              spark = tryStealSpark(robbed->sparks);
-          }
-          if (spark == NULL && !emptySparkPoolCap(robbed)) {
-              // we conflicted with another thread while trying to steal;
-              // try again later.
-              retry = rtsTrue;
-          }
-
-          if (spark != NULL) {
-              cap->spark_stats.converted++;
-              traceEventSparkSteal(cap, robbed->no);
-
-              return spark;
-          }
-          // otherwise: no success, try next one
-      }
-  } while (retry);
-
-  debugTrace(DEBUG_sched, "No sparks stolen");
-  return NULL;
-}
-
-// Returns True if any spark pool is non-empty at this moment in time
-// The result is only valid for an instant, of course, so in a sense
-// is immediately invalid, and should not be relied upon for
-// correctness.
-rtsBool
-anySparks (void)
-{
-    nat i;
-
-    for (i=0; i < n_capabilities; i++) {
-        if (!emptySparkPoolCap(capabilities[i])) {
-            return rtsTrue;
-        }
-    }
-    return rtsFalse;
-}
-#endif
-
 /* -----------------------------------------------------------------------------
  * Manage the returning_tasks lists.
  *
@@ -256,13 +153,6 @@ initCapability( Capability *cap, nat i )
     cap->returning_tasks_tl = NULL;
     cap->n_returning_tasks  = 0;
     cap->inbox              = (Message*)END_TSO_QUEUE;
-    cap->sparks             = allocSparkPool();
-    cap->spark_stats.created    = 0;
-    cap->spark_stats.dud        = 0;
-    cap->spark_stats.overflowed = 0;
-    cap->spark_stats.converted  = 0;
-    cap->spark_stats.gcd        = 0;
-    cap->spark_stats.fizzled    = 0;
 #if !defined(mingw32_HOST_OS)
     cap->io_manager_control_wr_fd = -1;
 #endif
@@ -294,9 +184,6 @@ initCapability( Capability *cap, nat i )
     traceCapCreate(cap);
     traceCapsetAssignCap(CAPSET_OSPROCESS_DEFAULT, i);
     traceCapsetAssignCap(CAPSET_CLOCKDOMAIN_DEFAULT, i);
-#if defined(THREADED_RTS)
-    traceSparkCounters(cap);
-#endif
 }
 
 /* ---------------------------------------------------------------------------
@@ -513,7 +400,7 @@ releaseCapability_ (Capability* cap,
     // anything else to do, give the Capability to a worker thread.
     if (always_wakeup ||
         !emptyRunQueue(cap) || !emptyInbox(cap) ||
-        (!cap->disabled && !emptySparkPoolCap(cap)) || globalWorkToDo()) {
+        !cap->disabled /* TODO RC SCHED: How should we handle this??? && !emptySparkPoolCap(cap))*/ || globalWorkToDo()) {
         if (cap->spare_workers) {
             giveCapabilityToTask(cap, cap->spare_workers);
             // The worker Task pops itself from the queue;
@@ -1050,7 +937,8 @@ shutdownCapabilities(Task *task, rtsBool safe)
         shutdownCapability(capabilities[i], task, safe);
     }
 #if defined(THREADED_RTS)
-    ASSERT(checkSparkCountInvariant());
+    // TODO RC: This needs to be moved to ResourceLimits
+    //ASSERT(checkSparkCountInvariant());
 #endif
 }
 
@@ -1059,7 +947,13 @@ freeCapability (Capability *cap)
 {
     //stgFree(cap->r.rCurrentTSO->rc->mut_lists);
 #if defined(THREADED_RTS)
-    freeSparkPool(cap->sparks);
+    // TODO RC SCHED: Q) How do we free spark pools now??
+    //                A) Maybe we need each capability to maintain a list of its
+    //                   RCs? This way, we can traverse them to free the spark
+    //                   pools. But first, when does this get called? This
+    //                   seems dangerous to do if a high thread can initiate
+    //                   this!
+    //freeSparkPool(cap->sparks);
 #endif
     traceCapsetRemoveCap(CAPSET_OSPROCESS_DEFAULT, cap->no);
     traceCapsetRemoveCap(CAPSET_CLOCKDOMAIN_DEFAULT, cap->no);
@@ -1136,15 +1030,17 @@ rtsBool checkSparkCountInvariant (void)
     SparkCounters sparks = { 0, 0, 0, 0, 0, 0 };
     StgWord64 remaining = 0;
     nat i;
-
-    for (i = 0; i < n_capabilities; i++) {
-        sparks.created   += capabilities[i]->spark_stats.created;
-        sparks.dud       += capabilities[i]->spark_stats.dud;
-        sparks.overflowed+= capabilities[i]->spark_stats.overflowed;
-        sparks.converted += capabilities[i]->spark_stats.converted;
-        sparks.gcd       += capabilities[i]->spark_stats.gcd;
-        sparks.fizzled   += capabilities[i]->spark_stats.fizzled;
-        remaining        += sparkPoolSize(capabilities[i]->sparks);
+    ResourceContainer *rc;
+    // TODO RC SCHED: This is not safe! We cannot iterate over all of the RCs
+    //                at runtime!! Think of a new way to do this
+    for (rc = RC_LIST; rc != NULL; rc = rc->link) {
+        sparks.created   += rc->spark_stats.created;
+        sparks.dud       += rc->spark_stats.dud;
+        sparks.overflowed+= rc->spark_stats.overflowed;
+        sparks.converted += rc->spark_stats.converted;
+        sparks.gcd       += rc->spark_stats.gcd;
+        sparks.fizzled   += rc->spark_stats.fizzled;
+        remaining        += sparkPoolSize(rc->sparks);
     }
 
     /* The invariant is

@@ -194,6 +194,10 @@ schedule (Capability *initialCapability, Task *task)
   while (1) {
 
     // TODO: Set the current alloc and nursery once the thread is found
+#if defined(THREADED_RTS)
+    cap->sparks = cap->r.rCurrentTSO->rc->sparks;
+    cap->spark_stats = cap->r.rCurrentTSO->rc->spark_stats;
+#endif
 
     // Check whether we have re-entered the RTS from Haskell without
     // going via suspendThread()/resumeThread (i.e. a 'safe' foreign

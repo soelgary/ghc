@@ -283,23 +283,38 @@ GarbageCollect (nat collect_gen,
     /* -------------------------------------------------------------------------
       * Repeatedly scavenge all the areas we know about until there's no
       * more scavenging to be done.
-      */
-      for (;;)
-      {
-          scavenge_until_all_done_rc(rc, gt, mark_stack_bd, mark_sp);
-          // The other threads are now stopped.  We might recurse back to
-          // here, but from now on this is the only thread.
+    ***/
+    for (;;)
+    {
+        scavenge_until_all_done_rc(rc, gt, mark_stack_bd, mark_sp);
+        // The other threads are now stopped.  We might recurse back to
+        // here, but from now on this is the only thread.
+
+        // must be last...  invariant is that everything is fully
+        // scavenged at this point.
+        if (traverseWeakPtrList(rc)) { // returns rtsTrue if evaced something
+            inc_running();
+            continue;
+        }
+
+        // If we get to here, there's really nothing left to do.
+        break;
+    }
+
+    // No need to shutdown GC threads
+
+    // Now see which stable names are still alive.
+    // TODO RC: We need to think about how to do stable pointers. For background,
+    //          these are used to pass values from Haskell to C. They are
+    //          guarenteed to stay the same (value and location) so that it is
+    //          interoperable with C.
+    //          I think the best way to do this is to have a stable pointer list
+    //          per RC. For now, I will leave the implementation as is.
+    //gcStableTables();
+
+    // TODO RC: Maybe lets bring back some LDV profiling
+
     
-          // must be last...  invariant is that everything is fully
-          // scavenged at this point.
-          if (traverseWeakPtrList(rc)) { // returns rtsTrue if evaced something
-              inc_running();
-              continue;
-          }
-    
-          // If we get to here, there's really nothing left to do.
-          break;
-      }
 
 
     barf("GC not implemented yet");

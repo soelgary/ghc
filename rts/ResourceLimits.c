@@ -8,6 +8,8 @@
 #include "sm/BlockAlloc.h"
 #include "Hash.h"
 #include "Capability.h"
+#include "Sparks.h"
+#include "Trace.h"
 
 ResourceContainer *RC_MAIN = NULL;
 ResourceContainer *RC_LIST = NULL;
@@ -269,6 +271,19 @@ newRC(ResourceContainer *parent)
   initGenerations(rc);
   initGCThread(rc);
 
+#if defined(THREADED_RTS)
+  // init sparks
+  rc->sparks                 = allocSparkPool();
+  rc->spark_stats.created    = 0;
+  rc->spark_stats.dud        = 0;
+  rc->spark_stats.overflowed = 0;
+  rc->spark_stats.converted  = 0;
+  rc->spark_stats.gcd        = 0;
+  rc->spark_stats.fizzled    = 0;
+
+  traceSparkCounters(rc->ownerTSO->cap);
+#endif
+
   RC_LIST = rc;
   RC_COUNT++;
   return rc;
@@ -415,3 +430,108 @@ markRC(evac_fn_rc evac, ResourceContainer *rc, rtsBool dontMarkSparks)
     - STMs
   */
 }
+
+#if defined(THREADED_RTS)
+StgClosure *
+findSpark (Capability *cap)
+{
+  Capability *robbed;
+  StgClosurePtr spark;
+  rtsBool retry;
+  nat i = 0;
+
+  ResourceContainer *rc = cap->r.rCurrentTSO->rc;
+
+  if (!emptyRunQueue(cap) || cap->n_returning_tasks != 0) {
+      // If there are other threads, don't try to run any new
+      // sparks: sparks might be speculative, we don't want to take
+      // resources away from the main computation.
+      return 0;
+  }
+
+  do {
+      retry = rtsFalse;
+
+      // first try to get a spark from our own pool.
+      // We should be using reclaimSpark(), because it works without
+      // needing any atomic instructions:
+      //   spark = reclaimSpark(cap->sparks);
+      // However, measurements show that this makes at least one benchmark
+      // slower (prsa) and doesn't affect the others.
+      spark = tryStealSpark(rc->sparks);
+      while (spark != NULL && fizzledSpark(spark)) {
+          cap->spark_stats.fizzled++;
+          traceEventSparkFizzle(cap);
+          spark = tryStealSpark(rc->sparks);
+      }
+      if (spark != NULL) {
+          cap->spark_stats.converted++;
+
+          // Post event for running a spark from capability's own pool.
+          traceEventSparkRun(cap);
+
+          return spark;
+      }
+      if (!emptySparkPoolRC(rc)) {
+          retry = rtsTrue;
+      }
+
+      if (n_capabilities == 1) { return NULL; } // makes no sense...
+
+      debugTrace(DEBUG_sched,
+                 "cap %d: Trying to steal work from other capabilities",
+                 cap->no);
+
+      /* visit cap.s 0..n-1 in sequence until a theft succeeds. We could
+      start at a random place instead of 0 as well.  */
+      for ( i=0 ; i < n_capabilities ; i++ ) {
+          robbed = capabilities[i];
+          if (cap == robbed)  // ourselves...
+              continue;
+
+          if (emptySparkPoolRC(robbed)) // nothing to steal here
+              continue;
+
+          spark = tryStealSpark(robbed->sparks);
+          while (spark != NULL && fizzledSpark(spark)) {
+              cap->spark_stats.fizzled++;
+              traceEventSparkFizzle(cap);
+              spark = tryStealSpark(robbed->sparks);
+          }
+          if (spark == NULL && !emptySparkPoolRC(robbed)) {
+              // we conflicted with another thread while trying to steal;
+              // try again later.
+              retry = rtsTrue;
+          }
+
+          if (spark != NULL) {
+              cap->spark_stats.converted++;
+              traceEventSparkSteal(cap, robbed->no);
+
+              return spark;
+          }
+          // otherwise: no success, try next one
+      }
+  } while (retry);
+
+  debugTrace(DEBUG_sched, "No sparks stolen");
+  return NULL;
+}
+
+// Returns True if any spark pool is non-empty at this moment in time
+// The result is only valid for an instant, of course, so in a sense
+// is immediately invalid, and should not be relied upon for
+// correctness.
+rtsBool
+anySparks (void)
+{
+    nat i;
+
+    for (i=0; i < n_capabilities; i++) {
+        if (!emptySparkPoolRC(capabilities[i])) {
+            return rtsTrue;
+        }
+    }
+    return rtsFalse;
+}
+#endif

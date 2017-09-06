@@ -650,13 +650,14 @@ stat_exit (void)
             {
                 nat i;
                 SparkCounters sparks = { 0, 0, 0, 0, 0, 0};
-                for (i = 0; i < n_capabilities; i++) {
-                    sparks.created   += capabilities[i]->spark_stats.created;
-                    sparks.dud       += capabilities[i]->spark_stats.dud;
-                    sparks.overflowed+= capabilities[i]->spark_stats.overflowed;
-                    sparks.converted += capabilities[i]->spark_stats.converted;
-                    sparks.gcd       += capabilities[i]->spark_stats.gcd;
-                    sparks.fizzled   += capabilities[i]->spark_stats.fizzled;
+                ResourceContainer *rc;
+                for (rc = RC_LIST; rc != NULL; rc = rc->link) {
+                    sparks.created   += rc->spark_stats.created;
+                    sparks.dud       += rc->spark_stats.dud;
+                    sparks.overflowed+= rc->spark_stats.overflowed;
+                    sparks.converted += rc->spark_stats.converted;
+                    sparks.gcd       += rc->spark_stats.gcd;
+                    sparks.fizzled   += rc->spark_stats.fizzled;
                 }
 
                 statsPrintf("  SPARKS: %" FMT_Word " (%" FMT_Word " converted, %" FMT_Word " overflowed, %" FMT_Word " dud, %" FMT_Word " GC'd, %" FMT_Word " fizzled)\n\n",

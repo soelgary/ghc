@@ -118,10 +118,12 @@ struct Capability_ {
     // Locks required: cap->lock
     Message *inbox;
 
+    // This just links to the current TSO sparks!
     SparkPool *sparks;
 
     // Stats on spark creation/conversion
     SparkCounters spark_stats;
+
 #if !defined(mingw32_HOST_OS)
     // IO manager for this cap
     int io_manager_control_wr_fd;
@@ -178,10 +180,6 @@ struct Capability_ {
   ASSERT(cap->suspended_ccalls == NULL ? cap->n_suspended_ccalls == 0 : 1); \
   ASSERT(myTask() == task);                                             \
   ASSERT_TASK_ID(task);
-
-#if defined(THREADED_RTS)
-rtsBool checkSparkCountInvariant (void);
-#endif
 
 // Converts a *StgRegTable into a *Capability.
 //
@@ -303,18 +301,6 @@ void prodAllCapabilities (void);
 //
 rtsBool tryGrabCapability (Capability *cap, Task *task);
 
-// Try to find a spark to run
-//
-StgClosure *findSpark (Capability *cap);
-
-// True if any capabilities have sparks
-//
-rtsBool anySparks (void);
-
-INLINE_HEADER rtsBool emptySparkPoolCap (Capability *cap);
-INLINE_HEADER nat     sparkPoolSizeCap  (Capability *cap);
-INLINE_HEADER void    discardSparksCap  (Capability *cap);
-
 #else // !THREADED_RTS
 
 // Grab a capability.  (Only in the non-threaded RTS; in the threaded
@@ -350,8 +336,6 @@ void markCapability (evac_fn evac, void *user, Capability *cap,
                      rtsBool no_mark_sparks USED_IF_THREADS);
 
 void markCapabilities (evac_fn evac, void *user);
-
-void traverseSparkQueues (evac_fn evac, void *user);
 
 /* -----------------------------------------------------------------------------
    Messages
@@ -403,21 +387,6 @@ recordClosureMutated (Capability *cap, StgClosure *p)
     bd = Bdescr((StgPtr)p);
     if (bd->gen_no != 0) recordMutableCap(p,cap,bd->gen_no);
 }
-
-
-#if defined(THREADED_RTS)
-INLINE_HEADER rtsBool
-emptySparkPoolCap (Capability *cap)
-{ return looksEmpty(cap->sparks); }
-
-INLINE_HEADER nat
-sparkPoolSizeCap (Capability *cap)
-{ return sparkPoolSize(cap->sparks); }
-
-INLINE_HEADER void
-discardSparksCap (Capability *cap)
-{ discardSparks(cap->sparks); }
-#endif
 
 INLINE_HEADER void
 stopCapability (Capability *cap)

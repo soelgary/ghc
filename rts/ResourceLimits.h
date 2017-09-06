@@ -3,6 +3,7 @@
 
 #include "sm/GCThread.h"
 #include "sm/GC.h"
+#include "Sparks.h"
 
 #include "BeginPrivate.h"
 
@@ -24,7 +25,40 @@ void setThreadParent(Capability *cap, StgTSO *parent);
 void releaseSpaceAndTime(ResourceContainer *rc);
 //void removeTSOFromSleepingQueue(ResourceContainer *rc, StgTSO *sleeping_queue);
 
+// For the GC
 void markRC(evac_fn_rc evac, ResourceContainer *rc, rtsBool dontMarkSparks);
+void traverseSparkQueues (evac_fn evac, void *user);
+
+#if defined(THREADED_RTS)
+rtsBool checkSparkCountInvariant (void);
+#endif
+
+// Try to find a spark to run
+//
+StgClosure *findSpark (Capability *cap);
+
+// True if any capabilities have sparks
+//
+rtsBool anySparks (void);
+
+INLINE_HEADER rtsBool emptySparkPoolRC (ResourceContainer *rc);
+INLINE_HEADER nat     sparkPoolSizeRC  (ResourceContainer *rc);
+INLINE_HEADER void    discardSparksRC  (ResourceContainer *rc);
+
+#if defined(THREADED_RTS)
+INLINE_HEADER rtsBool
+emptySparkPoolRC (ResourceContainer *rc)
+{ return looksEmpty(rc->sparks); }
+
+INLINE_HEADER nat
+sparkPoolSizeRC (ResourceContainer *rc)
+{ return sparkPoolSize(rc->sparks); }
+
+INLINE_HEADER void
+discardSparksRC (ResourceContainer *rc)
+{ discardSparks(rc->sparks); }
+#endif
+
 
 #include "EndPrivate.h"
 
