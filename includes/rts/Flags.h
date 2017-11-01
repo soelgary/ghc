@@ -90,8 +90,9 @@ typedef struct _DEBUG_FLAGS {
     rtsBool apply;          /* 'a' */
     rtsBool stm;            /* 'm' */
     rtsBool squeeze;        /* 'z'  stack squeezing & lazy blackholing */
-    rtsBool hpc; 	    /* 'c' coverage */
+    rtsBool hpc; 	        /* 'c' coverage */
     rtsBool sparks; 	    /* 'r' */
+    rtsBool snapshot;       /* 'sn' */
 } DEBUG_FLAGS;
 
 /* See Note [Synchronization of flags and base APIs] */

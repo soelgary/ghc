@@ -47,6 +47,8 @@
 #include "RaiseAsync.h"
 #include "Stable.h"
 #include "CheckUnload.h"
+#include "ResourceLimits.h"
+#include "Snapshot.h"
 
 #include <string.h> // for memset()
 #include <unistd.h>
@@ -91,10 +93,11 @@
  */
 
 /* N is the oldest generation being collected, where the generations
- * are numbered starting at 0.  A major GC (indicated by the major_gc
+ * are numbered starting at 0.  A major GC (indicated by the rc_major_gc
  * flag) is when we're collecting all generations.  We only attempt to
  * deal with static objects and GC CAFs when doing a major GC.
  */
+
 nat N;
 rtsBool major_gc;
 
@@ -144,18 +147,18 @@ DECLARE_GCT
 
 static void mark_root_rc (void *user, StgClosure **root, ResourceContainer *rc,
                           nat genNumber,  bdescr *mark_stack_bd,
-                          bdescr *mark_stack_top_bd, StgPtr mark_sp);
+                          bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt);
 static void mark_root               (void *user, StgClosure **root);
 static void prepare_collected_gen   (generation *gen);
 static void prepare_collected_gen_rc   (ResourceContainer *rc, nat genNumber);
-static void prepare_uncollected_gen (generation *gen);
+static void prepare_uncollected_gen (generation *gen, ResourceContainer *rc);
 static void init_gc_thread          (gc_thread *t);
-static void resize_generations      (void);
-static void resize_nursery          (void);
+static void resize_nursery          (ResourceContainer *rc, rtsBool rc_major_gc);
 static void start_gc_threads        (void);
 static void scavenge_until_all_done (void);
 static void scavenge_until_all_done_rc (ResourceContainer *rc, gc_thread *gt,
-                                        bdescr *mark_stack_bd, StgPtr mark_sp);
+                                        bdescr *mark_stack_bd, bdescr *mark_stack_top_bd,
+                                        StgPtr mark_sp);
 static StgWord inc_running          (void);
 static StgWord dec_running          (void);
 static void wakeup_gc_threads       (nat me);
@@ -164,6 +167,7 @@ static void collect_gct_blocks      (void);
 static void collect_gct_blocks_rc   (ResourceContainer *rc);
 static void collect_pinned_object_blocks (void);
 static void collect_pinned_object_blocks_rc (ResourceContainer *rc);
+static void resize_generations      (rtsBool rc_major_gc, ResourceContainer *rc);
 
 #if defined(DEBUG)
 static void gcCAFs                  (void);
@@ -175,6 +179,8 @@ static void gcCAFs                  (void);
    Locks held: all capabilities are held throughout GarbageCollect().
    -------------------------------------------------------------------------- */
 
+int derp() { return 666; }
+
 void
 GarbageCollect (nat collect_gen,
                 rtsBool do_heap_census,
@@ -183,6 +189,10 @@ GarbageCollect (nat collect_gen,
 {
     debugTrace(DEBUG_gc, "Starting GC");
     
+//    memInventory(rtsTrue);
+    
+    rtsBool rc_major_gc;
+
     nat g;
 
     // USE THESE, NOT THE GLOBAL ONES
@@ -190,13 +200,20 @@ GarbageCollect (nat collect_gen,
     bdescr *mark_stack_bd;     // current block in the mark stack
     StgPtr mark_sp;            // pointer to the next unallocated mark stack entry
 
-    N = collect_gen;
-    major_gc = (N == 2);
-    if (major_gc) {
+
+    bdescr *bd;
+    generation *gen;
+
+    StgWord live_blocks, live_words, par_max_copied, par_tot_copied;
+
+    rc_major_gc = (collect_gen == 2);
+    if (rc_major_gc) {
         debugTrace(DEBUG_gc, "major gc is not supported yet");
     }
 
     n_gc_threads = 1;
+
+    //takeSnapshot("/tmp/before_gc.txt");
 
 #ifdef DEBUG
   // check for memory leaks if DEBUG is on
@@ -208,22 +225,22 @@ GarbageCollect (nat collect_gen,
     collectFreshWeakPtrsRC(rc);
 
     // check sanity *before* GC
-    IF_DEBUG(sanity, checkSanity(rtsFalse /* before GC */, major_gc));
+    IF_DEBUG(sanity, checkSanity(rtsFalse /* before GC */, rc_major_gc));
 
     // gather blocks allocated using allocatePinned() from each RC
     // and put them on the rc->g0->large_object list.
     collect_pinned_object_blocks();
 
     // Initialise all the generations/steps that we're collecting.
-    for (g = 0; g < N; g++) {
+    for (g = 0; g < collect_gen; g++) {
         prepare_collected_gen_rc(rc, g);
     }
 
     // Initialise all the generations/steps that we're *not* collecting.
     // TODO: I dont think we want to do this. This could affect other RCs
-    //for (g = N+1; g < RtsFlags.GcFlags.generations; g++) {
-    //  prepare_uncollected_gen(&generations[g]);
-    //}
+    for (g = collect_gen+1; g < RtsFlags.GcFlags.generations; g++) {
+      prepare_uncollected_gen(rc->generations[g], rc);
+    }
 
     gc_thread *gt = rc->gc_thread;
 
@@ -232,7 +249,7 @@ GarbageCollect (nat collect_gen,
 
     /* Allocate a mark stack if we're doing a major collection.
     */
-    if (major_gc && oldest_gen->mark) {
+    if (rc_major_gc && rc->generations[1]->mark) {
         mark_stack_bd         = allocBlockFor(rc);
         mark_stack_top_bd     = mark_stack_bd;
         mark_stack_bd->link   = NULL;
@@ -256,16 +273,14 @@ GarbageCollect (nat collect_gen,
     traceEventGcWork(rc);
 
     // mut lists can just be scavenged with no marking?
-    scavenge_rc_mut_lists(rc);
-    
-
+    scavenge_rc_mut_lists(rc, mark_stack_bd, mark_stack_top_bd, mark_sp);
 
     // follow roots from the CAF list (used by GHCi)
     gt->evac_gen_no = 0;
-    markCAFs(mark_root_rc, gt);
+    markCAFs(mark_root_rc, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
 
     // Lets mark the roots of this RC
-    markRC(mark_root_rc, rc, rtsTrue);
+    markRC(mark_root_rc, rc, rtsTrue, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
 
     // Do not mark scheduler here! It just follows the queues. This will
     // leak information!
@@ -274,11 +289,11 @@ GarbageCollect (nat collect_gen,
     // want to support windows?
 
     // 
-    markWeakPtrList(rc, mark_stack_bd, mark_stack_top_bd, mark_sp);
+    markWeakPtrList(rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
     initWeakForGC(rc);
 
     // Mark the stable pointer table.
-    markStableTables(mark_root_rc, gt);
+    markStableTables(mark_root_rc, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
 
     /* -------------------------------------------------------------------------
       * Repeatedly scavenge all the areas we know about until there's no
@@ -286,14 +301,14 @@ GarbageCollect (nat collect_gen,
     ***/
     for (;;)
     {
-        scavenge_until_all_done_rc(rc, gt, mark_stack_bd, mark_sp);
+        scavenge_until_all_done_rc(rc, gt, mark_stack_bd, mark_stack_top_bd, mark_sp);
         // The other threads are now stopped.  We might recurse back to
         // here, but from now on this is the only thread.
 
         // must be last...  invariant is that everything is fully
         // scavenged at this point.
         if (traverseWeakPtrList(rc)) { // returns rtsTrue if evaced something
-            inc_running();
+            //inc_running(); TODO RC: Keep this???
             continue;
         }
 
@@ -312,12 +327,157 @@ GarbageCollect (nat collect_gen,
     //          per RC. For now, I will leave the implementation as is.
     //gcStableTables();
 
+#ifdef THREADED_RTS
+    pruneSparkQueue(rc);
+#endif
+
     // TODO RC: Maybe lets bring back some LDV profiling
 
-    
+    // TODO RC: Implement Sweep/Compact on old gen
+
+    copied = 0;
+    par_tot_copied = 0;
+    {
+        nat i;
+        debugTrace(DEBUG_gc,"thread %d:", gt->thread_index);
+        debugTrace(DEBUG_gc,"   copied           %ld", gt->copied * sizeof(W_));
+        debugTrace(DEBUG_gc,"   scanned          %ld", gt->scanned * sizeof(W_));
+        debugTrace(DEBUG_gc,"   any_work         %ld", gt->any_work);
+        debugTrace(DEBUG_gc,"   no_work          %ld", gt->no_work);
+        debugTrace(DEBUG_gc,"   scav_find_work %ld",   gt->scav_find_work);
+        copied += gt->copied;
+        par_tot_copied = copied;
+        par_tot_copied = 0;
+        if(copied == 0) {
+            //heapOverflow();
+            barf("Nothing was copied");
+        }
+    }
 
 
-    barf("GC not implemented yet");
+    for(g = 0; g < RtsFlags.GcFlags.generations; g++)  {
+        // - gotta free from-space
+        // - gotta make to-space the new from-space
+
+        bdescr *next, *prev;
+        gen = rc->generations[g];
+
+        // for generations we collected...
+        if (g <= collect_gen) {
+            /* free old memory and shift to-space into from-space for all
+             * the collected steps (except the allocation area).  These
+             * freed blocks will probaby be quickly recycled.
+             */
+            if (gen->mark) {
+                // tack the new blocks on the end of the existing blocks
+                if (gen->old_blocks != NULL) {
+                    prev = NULL;
+                    for (bd = gen->old_blocks; bd != NULL; bd = next) {
+                        next = bd->link;
+                        if (!(bd->flags & BF_MARKED)) {
+                            if (prev == NULL) {
+                                gen->old_blocks = next;
+                            } else {
+                                prev->link = next;
+                            }
+                            freeGroup(bd);
+                            gen->n_old_blocks--;
+                        } else {
+                            gen->n_words += bd->free - bd->start;
+                            bd->flags &= ~BF_MARKED;
+                            bd->flags |= BF_EVACUATED;
+                            debugTrace(DEBUG_gc, "SET EVACUATED FLAGS");
+                            prev = bd;
+                        }
+                    }
+                    // TODO CONTINUE HERE
+                    if (prev != NULL) {
+                        prev->link = gen->blocks;
+                        gen->blocks = gen->old_blocks;
+                    }
+                }
+                // add the new blocks to the block tally
+                gen->n_blocks += gen->n_old_blocks;
+                ASSERT(countBlocks(gen->blocks) == gen->n_blocks);
+                ASSERT(countOccupied(gen->blocks) == gen->n_words);
+            } else {
+                freeChain(gen->old_blocks);
+            }
+
+            gen->old_blocks = NULL;
+            gen->n_old_blocks = 0;
+
+            /* LARGE OBJECTS.  The current live large objects are chained on
+             * scavenged_large, having been moved during garbage
+             * collection from large_objects.  Any objects left on the
+             * large_objects list are therefore dead, so we free them here.
+            */
+            freeChain(gen->large_objects);
+            gen->large_objects  = gen->scavenged_large_objects;
+            gen->n_large_blocks = gen->n_scavenged_large_blocks;
+            gen->n_large_words  = countOccupied(gen->large_objects);
+            gen->n_new_large_words = 0;
+        } else { // for generations > collect_gen
+            /* For older generations, we need to append the
+             * scavenged_large_object list (i.e. large objects that have been
+             * promoted during this GC) to the large_object list for that step.
+            */
+            for (bd = gen->scavenged_large_objects; bd; bd = next) {
+                next = bd->link;
+                dbl_link_onto(bd, &gen->large_objects);
+                gen->n_large_words += bd->free - bd->start;
+            }
+
+            // add the new blocks we promoted during this GC
+            gen->n_large_blocks += gen->n_scavenged_large_blocks;
+        }
+
+        ASSERT(countBlocks(gen->large_objects) == gen->n_large_blocks);
+        ASSERT(countOccupied(gen->large_objects) == gen->n_large_words);
+
+        gen->scavenged_large_objects = NULL;
+        gen->n_scavenged_large_blocks = 0;
+
+        // Count "live" data
+        live_words  += genLiveWords(gen);
+        live_blocks += genLiveBlocks(gen);
+
+        // add in the partial blocks in the gen_workspaces
+        {
+            nat i;
+            for (i = 0; i < n_capabilities; i++) {
+                live_words  += gcThreadLiveWords(i, gen->no, gt);
+                live_blocks += gcThreadLiveBlocks(i, gen->no, gt);
+            }
+        }
+    }
+
+    // update the max size of older generations after a major GC
+    resize_generations(rc_major_gc, rc);
+
+    // Free the mark stack.
+    if (mark_stack_top_bd != NULL) {
+        debugTrace(DEBUG_gc, "mark stack: %d blocks",
+                countBlocks(mark_stack_top_bd));
+        freeChain(mark_stack_top_bd);
+    }
+
+    // Free any bitmaps.
+    for (g = 0; g <= collect_gen; g++) {
+        gen = rc->generations[g];
+        if (gen->bitmap != NULL) {
+            freeGroup(gen->bitmap);
+            gen->bitmap = NULL;
+        }
+    }
+
+    //for(bd = rc->generations[0]; bd != NULL; )
+
+    //resizeNursery(rc->nursery, 10);
+    resize_nursery(rc, rc_major_gc);
+
+    //takeSnapshot("/tmp/after_gc.txt");
+    //barf("GC not finished yet");
 }
 
 /* -----------------------------------------------------------------------------
@@ -370,7 +530,7 @@ new_gc_thread (nat n, gc_thread *t)
             bdescr *bd = allocBlock(); // no lock, locks aren't initialised yet
 
             // NOTE: We dont necessarily want gc_threads to be tied to a given
-            // RC. For one, there are only N gc_threads, where N is the num
+            // RC. For one, there are only collect_gen gc_threads, where N is the num
             // capabilities. Which RC do they belong to at the start?? Ideally,
             // we can have a gc_thread per RC, but Im scared of the performance
             // and space costs of this. --GS
@@ -531,7 +691,7 @@ scavenge_until_all_done (void)
 }
 
 static void
-scavenge_until_all_done_rc (ResourceContainer *rc, gc_thread *gt, bdescr *mark_stack_bd, StgPtr mark_sp)
+scavenge_until_all_done_rc (ResourceContainer *rc, gc_thread *gt, bdescr *mark_stack_bd, bdescr *mark_stack_top_bd, StgPtr mark_sp)
 {
     DEBUG_ONLY( nat r );
 
@@ -539,12 +699,12 @@ scavenge_until_all_done_rc (ResourceContainer *rc, gc_thread *gt, bdescr *mark_s
 loop:
 #if defined(THREADED_RTS)
     if (n_gc_threads > 1) {
-        scavenge_loop(rc, gt, mark_stack_bd, mark_sp);
+        scavenge_loop(rc, gt, mark_stack_bd, mark_stack_top_bd, mark_sp);
     } else {
-        scavenge_loop1(rc, gt, mark_stack_bd, mark_sp);
+        scavenge_loop1(rc, gt, mark_stack_bd, mark_stack_top_bd, mark_sp);
     }
 #else
-    scavenge_loop(rc, gt, mark_stack_bd, mark_sp);
+    scavenge_loop(rc, gt, mark_stack_bd, mark_stack_top_bd, mark_sp);
 #endif
 
     collect_gct_blocks_rc(rc);
@@ -615,7 +775,7 @@ gcWorkerThread (Capability *cap)
     scavenge_capability_mut_lists(cap);
 
     // TODO RC -- fix mark stack here
-    scavenge_until_all_done_rc(cap->r.rCurrentTSO->rc, saved_gct, NULL, NULL);
+    scavenge_until_all_done_rc(cap->r.rCurrentTSO->rc, saved_gct, NULL, NULL, NULL);
 
 #ifdef THREADED_RTS
     // Now that the whole heap is marked, we discard any sparks that
@@ -624,7 +784,7 @@ gcWorkerThread (Capability *cap)
     // non-deterministic whether a spark will be retained if it is
     // only reachable via weak pointers.  To fix this problem would
     // require another GC barrier, which is too high a price.
-    pruneSparkQueue(cap);
+    pruneSparkQueue(cap->r.rCurrentTSO->rc);
 #endif
 
     // Wait until we're told to continue
@@ -824,7 +984,7 @@ prepare_collected_gen_rc(ResourceContainer *rc, nat genNumber)
     }
 
     // mark the large objects as from-space
-    for (bd = rc->large_objects; bd; bd = bd->link) {
+    for (bd = gen->large_objects; bd; bd = bd->link) {
         bd->flags &= ~BF_EVACUATED;
     }
 
@@ -1001,10 +1161,10 @@ prepare_collected_gen (generation *gen)
    ------------------------------------------------------------------------- */
 
 static void
-stash_mut_list (Capability *cap, nat gen_no)
+stash_mut_list (Capability *cap, nat gen_no, ResourceContainer *rc)
 {
-    cap->r.rCurrentTSO->rc->saved_mut_lists[gen_no] = cap->r.rCurrentTSO->rc->mut_lists[gen_no];
-    cap->r.rCurrentTSO->rc->mut_lists[gen_no] = allocBlock_sync();
+    rc->saved_mut_lists[gen_no] = rc->mut_lists[gen_no];
+    rc->mut_lists[gen_no] = allocBlock_sync();
 }
 
 /* ----------------------------------------------------------------------------
@@ -1012,7 +1172,7 @@ stash_mut_list (Capability *cap, nat gen_no)
    ------------------------------------------------------------------------- */
 
 static void
-prepare_uncollected_gen (generation *gen)
+prepare_uncollected_gen (generation *gen, ResourceContainer *rc)
 {
     nat i;
 
@@ -1022,9 +1182,7 @@ prepare_uncollected_gen (generation *gen)
     // save the current mutable lists for this generation, and
     // allocate a fresh block for each one.  We'll traverse these
     // mutable lists as roots early on in the GC.
-    for (i = 0; i < n_capabilities; i++) {
-        stash_mut_list(capabilities[i], gen->no);
-    }
+    stash_mut_list(capabilities[i], gen->no, rc);
 
     ASSERT(gen->scavenged_large_objects == NULL);
     ASSERT(gen->n_scavenged_large_blocks == 0);
@@ -1048,8 +1206,8 @@ collect_gct_blocks_rc (ResourceContainer *rc)
     bdescr *bd, *prev;
 
     for (g = 0; g < RtsFlags.GcFlags.generations; g++) {
-        ws = rc->generations[g];
-
+        ws = &rc->gc_thread->gens[g];
+        debugTrace(DEBUG_gc, "EVRYBODY WAS DERPING");
         // there may still be a block attached to ws->todo_bd;
         // leave it there to use next time.
 
@@ -1101,11 +1259,11 @@ collect_pinned_object_blocks_rc(ResourceContainer *rc)
     }
 
     if (prev != NULL) {
-        prev->link = rc->large_objects;
-        if(rc->large_objects != NULL) {
-            rc->large_objects->u.back = prev;
+        prev->link = rc->generations[0]->large_objects;
+        if(rc->generations[0]->large_objects != NULL) {
+            rc->generations[0]->large_objects->u.back = prev;
         }
-        rc->large_objects = rc->pinned_object_blocks;
+        rc->generations[0]->large_objects = rc->pinned_object_blocks;
         rc->pinned_object_blocks = NULL;
     }
 }
@@ -1187,9 +1345,9 @@ mark_root(void *user USED_IF_THREADS, StgClosure **root)
 static void
 mark_root_rc(void *user USED_IF_THREADS, StgClosure **root,
              ResourceContainer *rc, nat genNumber, bdescr *mark_stack_bd,
-             bdescr *mark_stack_top_bd, StgPtr mark_sp)
+             bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt)
 {
-    evacuate_rc(root, rc, mark_stack_bd, mark_stack_top_bd, mark_sp);
+    evacuate_rc(root, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
 }
 
 /* ----------------------------------------------------------------------------
@@ -1201,13 +1359,12 @@ mark_root_rc(void *user USED_IF_THREADS, StgClosure **root,
    ------------------------------------------------------------------------- */
 
 static void
-resize_generations (void)
+resize_generations (rtsBool rc_major_gc, ResourceContainer *rc)
 {
-    // TODO: I dont think this is even used...
-    /*
     nat g;
+    generation *oldest_gen = &rc->generations[RtsFlags.GcFlags.generations - 1];
 
-    if (major_gc && RtsFlags.GcFlags.generations > 1) {
+    if (rc_major_gc && RtsFlags.GcFlags.generations > 1) {
         W_ live, size, min_alloc, words;
         const W_ max  = RtsFlags.GcFlags.maxHeapSize;
         const W_ gens = RtsFlags.GcFlags.generations;
@@ -1219,8 +1376,8 @@ resize_generations (void)
             words = oldest_gen->n_words;
         }
         // TODO: fixme
-        //live = (words + BLOCK_SIZE_W - 1) / BLOCK_SIZE_W +
-         //   oldest_gen->n_large_blocks;
+        live = (words + BLOCK_SIZE_W - 1) / BLOCK_SIZE_W +
+            oldest_gen->n_large_blocks;
 
         // default max size for all generations except zero
         size = stg_max(live * RtsFlags.GcFlags.oldGenFactor,
@@ -1291,10 +1448,9 @@ resize_generations (void)
 #endif
 
         for (g = 0; g < gens; g++) {
-            generations[g].max_blocks = size;
+            rc->generations[g]->max_blocks = size;
         }
     }
-    */
 }
 
 /* -----------------------------------------------------------------------------
@@ -1302,17 +1458,16 @@ resize_generations (void)
    -------------------------------------------------------------------------- */
 
 static void
-resize_nursery (void)
+resize_nursery (ResourceContainer *rc, rtsBool rc_major_gc)
 {
     // TODO: Do this per RC. Cannot resize them all at once though
-    /*
+
     const StgWord min_nursery =
       RtsFlags.GcFlags.minAllocAreaSize * (StgWord)n_capabilities;
 
     if (RtsFlags.GcFlags.generations == 1)
     {   // Two-space collector:
         W_ blocks;
-    */
         /* set up a new nursery.  Allocate a nursery size based on a
          * function of the amount of live data (by default a factor of 2)
          * Use the blocks from the old nursery if possible, freeing up any
@@ -1327,8 +1482,7 @@ resize_nursery (void)
          * performance we get from 3L bytes, reducing to the same
          * performance at 2L bytes.
          */
-      /*
-        blocks = generations[0].n_blocks;
+        blocks = rc->nursery->n_blocks;//generations[0].n_blocks;
 
         if ( RtsFlags.GcFlags.maxHeapSize != 0 &&
              blocks * RtsFlags.GcFlags.oldGenFactor * 2 >
@@ -1343,8 +1497,8 @@ resize_nursery (void)
                        RtsFlags.GcFlags.maxHeapSize, blocks, adjusted_blocks);
 
             pc_free = adjusted_blocks * 100 / RtsFlags.GcFlags.maxHeapSize;
-            if (pc_free < RtsFlags.GcFlags.pcFreeHeap) *//* might even * be < 0 */
-            /*{
+            if (pc_free < RtsFlags.GcFlags.pcFreeHeap) /* might even * be < 0 */
+            {
                 heapOverflow();
             }
             blocks = adjusted_blocks;
@@ -1360,18 +1514,18 @@ resize_nursery (void)
         resizeNurseries(blocks);
     }
     else  // Generational collector
-    {*/
+    {
         /*
          * If the user has given us a suggested heap size, adjust our
          * allocation area to make best use of the memory available.
-         *//*
+         */
         if (RtsFlags.GcFlags.heapSizeSuggestion)
         {
             long blocks;
             StgWord needed;
 
-            calcNeeded(rtsFalse, &needed); // approx blocks needed at next GC
-            */
+            calcNeeded(rtsFalse, &needed, rc); // approx blocks needed at next GC
+            
             /* Guess how much will be live in generation 0 step 0 next time.
              * A good approximation is obtained by finding the
              * percentage of g0 that was live at the last minor GC.
@@ -1381,13 +1535,13 @@ resize_nursery (void)
              * a small adjustment for estimated slop at the end of a block
              * (- 10 words).
              */
-             /*
-            if (N == 0)
+            
+            if (rc_major_gc == 0)
             {
                 g0_pcnt_kept = ((copied / (BLOCK_SIZE_W - 10)) * 100)
                     / countNurseryBlocks();
             }
-            */
+            
             /* Estimate a size for the allocation area based on the
              * information available.  We might end up going slightly under
              * or over the suggested heap size, but we should be pretty
@@ -1400,7 +1554,7 @@ resize_nursery (void)
              * where 'needed' is the amount of memory needed at the next
              * collection for collecting all gens except g0.
              */
-             /*
+            
             blocks =
                 (((long)RtsFlags.GcFlags.heapSizeSuggestion - (long)needed) * 100) /
                 (100 + (long)g0_pcnt_kept);
@@ -1415,12 +1569,11 @@ resize_nursery (void)
         {
             // we might have added extra blocks to the nursery, so
             // resize back to the original size again.
-            //resizeNurseriesFixed();
+            resizeNurseriesFixed();
             // TODO: Resize the nurseries used here!
             //barf("Resize the damn nurseries");
         }
     }
-    */
 }
 
 /* -----------------------------------------------------------------------------

@@ -410,9 +410,13 @@
    HP_CHK_P(bytes);                             \
    TICK_ALLOC_HEAP_NOCTR(bytes);
 
-#define CHECK_GC()                                                      \
-  (bdescr_link(CurrentNursery) == NULL ||                               \
-   generation_n_new_large_words(W_[g0]) >= TO_W_(CLong[large_alloc_lim]))
+//#define CHECK_GC()                                                      \
+//  (bdescr_link(CurrentNursery) == NULL ||                               \
+//   generation_n_new_large_words(W_[g0]) >= TO_W_(CLong[large_alloc_lim]))
+
+// TODO RC: Get this macro to check large words per RC. Otherwise, this
+//          is incomplete
+#define CHECK_GC() (bdescr_link(CurrentNursery) == NULL)
 
 // allocate() allocates from the nursery, so we check to see
 // whether the nursery is nearly empty in any function that uses

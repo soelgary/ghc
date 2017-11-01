@@ -23,10 +23,12 @@ W_ countRCBlocks(ResourceContainer *rc);
 void setThreadParent(Capability *cap, StgTSO *parent);
 
 void releaseSpaceAndTime(ResourceContainer *rc);
+
 //void removeTSOFromSleepingQueue(ResourceContainer *rc, StgTSO *sleeping_queue);
 
 // For the GC
-void markRC(evac_fn_rc evac, ResourceContainer *rc, rtsBool dontMarkSparks);
+void markRC(evac_fn_rc evac, ResourceContainer *rc, rtsBool dontMarkSparks,
+  bdescr *mark_stack_bd, bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt);
 void traverseSparkQueues (evac_fn evac, void *user);
 
 #if defined(THREADED_RTS)

@@ -183,6 +183,7 @@ void initRtsFlagsDefaults(void)
     RtsFlags.DebugFlags.squeeze         = rtsFalse;
     RtsFlags.DebugFlags.hpc             = rtsFalse;
     RtsFlags.DebugFlags.sparks          = rtsFalse;
+    RtsFlags.DebugFlags.snapshot        = rtsFalse;
 #endif
 
 #if defined(PROFILING)
@@ -389,6 +390,7 @@ usage_text[] = {
 "  -Dz  DEBUG: stack squeezing",
 "  -Dc  DEBUG: program coverage",
 "  -Dr  DEBUG: sparks",
+"  -Dsn DEBUG: snapshot"
 "",
 "     NOTE: DEBUG events are sent to stderr by default; add -l to create a",
 "     binary event log file instead.",
@@ -1579,6 +1581,8 @@ static void read_debug_flags(const char* arg)
         case 'r':
             RtsFlags.DebugFlags.sparks = rtsTrue;
             break;
+        case 'sn':
+            RtsFlags.DebugFlags.snapshot = rtsTrue;
         default:
             bad_option( arg );
         }

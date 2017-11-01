@@ -40,7 +40,8 @@ allocGroupFor(W_ n, ResourceContainer *rc)
     ASSERT(rc->status == RC_KILLED);
     return NULL;
   }
-  bdescr *bd = allocGroup(n);
+  bdescr *bd = allocBlock();
+  initBdescr(bd,rc->generations[0], rc->generations[0], rc);
   ASSERT(real == 0 || bd->blocks == real);
   bdescr *curr;
   for(curr = bd; curr != NULL; curr = curr->link) {
@@ -102,6 +103,10 @@ initRCGeneration(ResourceContainer *rc, nat genNumber)
   rc->generations[genNumber]->blocks = NULL;
   rc->generations[genNumber]->n_blocks = 0;
   rc->generations[genNumber]->n_words = 0;
+  rc->generations[genNumber]->large_objects = NULL;
+  rc->generations[genNumber]->n_large_blocks = 0;
+  rc->generations[genNumber]->n_large_words = 0;
+  rc->generations[genNumber]->n_new_large_words = 0;
 }
 
 void
@@ -113,6 +118,8 @@ initGenerations(ResourceContainer *rc)
     rc->generations[g] = gen;
     initRCGeneration(rc, g);
   }
+  rc->generations[0]->to = rc->generations[1];
+  rc->generations[1]->to = rc->generations[1];
 }
 
 void
@@ -152,8 +159,10 @@ initGCThread(ResourceContainer *rc)
     ws->my_gct = gct;
     
     bdescr *bd = allocBlockFor(rc);
+    debugTrace(DEBUG_gc, "RC got block for GC workspace %p", bd);
     bd->flags = BF_EVACUATED;
     bd->u.scan = bd->free = bd->start;
+    bd->gen = rc->generations[0];
 
     ws->todo_bd = bd;
     ws->todo_free = bd->free;
@@ -189,6 +198,10 @@ newRC(ResourceContainer *parent)
   //StgRC *stgRC = stgMallocBytes(sizeof(StgRC), "newStgRC");
   //SET_HDR(stgRC, &stg_RC_info, CCS_SYSTEM);
   ResourceContainer *rc = stgMallocBytes(sizeof(ResourceContainer), "newRC");
+
+  rc->allocationCount = 0;
+  rc->foundCount = 0;
+
   //stgRC->rc = rc;
   rc->status = RC_NORMAL;
   rc->used_blocks = 0;
@@ -215,14 +228,24 @@ newRC(ResourceContainer *parent)
       barf("Unknown heap size");
   }
 
-  rc->generations = stgMallocBytes(numGenerations * sizeof(struct generation_ *),
-                                   "createGenerations");
+  rc->generations = stgMallocBytes(numGenerations * sizeof(struct generation_ *), "createGenerations");
+  rc->mut_lists  = stgMallocBytes(sizeof(bdescr *) * RtsFlags.GcFlags.generations, "newRC");
+  rc->saved_mut_lists = stgMallocBytes(sizeof(bdescr *) * RtsFlags.GcFlags.generations, "newRC");
 
+  initGenerations(rc);
+
+  nat g;
+  for (g = 0; g < RtsFlags.GcFlags.generations; g++) {
+    rc->mut_lists[g] = allocBlockFor(rc);
+    debugTrace(DEBUG_gc, "RC got block for mut list %p", rc->mut_lists[g]);
+    rc->saved_mut_lists[g] = allocBlockFor(rc);
+    debugTrace(DEBUG_gc, "RC got block for GC workspace %p", rc->saved_mut_lists[g]);
+  }
 
   nursery *nurse = stgMallocBytes(sizeof(struct nursery_), "rcCreateNursery");
-  memcount initialNurserySize = 1;
+  memcount initialNurserySize = 20;
   bdescr *bd = allocNursery(NULL, initialNurserySize, rc);
-  
+  rc->generations[0]->blocks = bd;
   rc->isDead = rtsFalse;
 
   nurse->blocks = bd;
@@ -231,14 +254,11 @@ newRC(ResourceContainer *parent)
 
   rc->nursery = nurse;
   rc->currentAlloc = bd;
+  rc->generations[0]->blocks = bd;
+  rc->generations[0]->n_blocks = initialNurserySize;
 
   rc->pinned_object_block = NULL;
   rc->pinned_object_blocks = NULL;
-
-  rc->large_objects = NULL;
-  rc->n_large_blocks = 0;
-  rc->n_large_words = 0;
-  rc->n_new_large_words = 0;
 
   rc->max_blocks = max_blocks;
 
@@ -247,17 +267,6 @@ newRC(ResourceContainer *parent)
 
   rc->parent = parent;
   rc->free_blocks = NULL;
-
-  rc->mut_lists  = stgMallocBytes(sizeof(bdescr *) *
-                                     RtsFlags.GcFlags.generations,
-                                     "newRC");
-  rc->saved_mut_lists = stgMallocBytes(sizeof(bdescr *) *
-                                        RtsFlags.GcFlags.generations,
-                                        "newRC");
-  nat g;
-  for (g = 0; g < RtsFlags.GcFlags.generations; g++) {
-    rc->mut_lists[g] = allocBlockFor(rc);
-  }
 
   rc->link = RC_LIST;
   rc->children = NULL;
@@ -268,7 +277,6 @@ newRC(ResourceContainer *parent)
 
   rc->id = RC_COUNT;
 
-  initGenerations(rc);
   initGCThread(rc);
 
 #if defined(THREADED_RTS)
@@ -283,6 +291,13 @@ newRC(ResourceContainer *parent)
 
   traceSparkCounters(rc->ownerTSO->cap);
 #endif
+  rc->sparks                 = NULL;
+  rc->spark_stats.created    = NULL;
+  rc->spark_stats.dud        = NULL;
+  rc->spark_stats.overflowed = NULL;
+  rc->spark_stats.converted  = NULL;
+  rc->spark_stats.gcd        = NULL;
+  rc->spark_stats.fizzled    = NULL;
 
   RC_LIST = rc;
   RC_COUNT++;
@@ -371,7 +386,7 @@ releaseSpaceAndTime(ResourceContainer *rc)
 
   // TODO: Check if there are any pointers into this RC before releasing all
   //       the blocks. Maybe have a remembered set for this?
-
+  /*
   nat n = rc->max_blocks;
   nat actual = 0;
   bdescr *start;
@@ -391,7 +406,7 @@ releaseSpaceAndTime(ResourceContainer *rc)
     appendToFreeList(rc->parent, rc->nursery->blocks);
     appendToFreeList(rc->parent, rc->pinned_object_block);
     appendToFreeList(rc->parent, rc->pinned_object_blocks);
-    appendToFreeList(rc->parent, rc->large_objects);
+    // appendToFreeList(rc->parent, rc->large_objects);
     appendToFreeList(rc->parent, rc->free_blocks);
     debugTrace(DEBUG_gc, "Released %d blocks to parent", released);
   } else {
@@ -402,10 +417,12 @@ releaseSpaceAndTime(ResourceContainer *rc)
     releaseSpaceAndTime(rc->parent);
   }
   rc->isDead = rtsTrue;
+  */
 }
 
 void
-markRC(evac_fn_rc evac, ResourceContainer *rc, rtsBool dontMarkSparks)
+markRC(evac_fn_rc evac, ResourceContainer *rc, rtsBool dontMarkSparks,
+    bdescr *mark_stack_bd, bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt)
 {
   // TODO RC: We need to mark the other roots. But first, figure out what 
   // they are!
@@ -414,12 +431,16 @@ markRC(evac_fn_rc evac, ResourceContainer *rc, rtsBool dontMarkSparks)
   // We only evac the first gen?
   nat genNumber = 0;
 
-  evac(rc, (StgClosure **)(void *)&rc->ownerTSO, rc, genNumber);
+  evac(rc, (StgClosure **)(void *)&rc->ownerTSO, rc, genNumber, mark_stack_bd,
+       mark_stack_top_bd, mark_sp, gt);
 
+#if defined(THREADED_RTS)
+  //traverseSparkQueueRC(evac, rc, genNumber, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+#endif
   /*
     What are the roots of the RC?
     - owner TSO
-    - 
+    - sparks?
 
     What are the roots of a capability?
     - run queue head

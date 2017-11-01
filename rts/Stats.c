@@ -811,9 +811,6 @@ statDescribeGens(void)
 
   ResourceContainer *rc;
   for (rc = RC_LIST; rc != NULL; rc = rc->link) {
-      for(bd = rc->large_objects, lge = 0; bd; bd = bd->link) {
-          lge++;
-      }
       bd = rc->pinned_object_block;
       if (bd != NULL) {
         gen_live += bd->free - bd->start;
@@ -823,14 +820,18 @@ statDescribeGens(void)
     for (g = 0; g < RtsFlags.GcFlags.generations; g++) {
         gen = &generations[g];
 
+        for(bd = gen->large_objects, lge = 0; bd; bd = bd->link) {
+            lge++;
+        }
+
         gen_live   += rcLiveWords(gen);
         gen_blocks += rcLiveBlocks(gen);
 
         mut = 0;
 
         mut += countOccupied(rc->mut_lists[g]);
-        gen_live   += gcThreadLiveWords(0,g);
-        gen_blocks += gcThreadLiveBlocks(0,g);
+        gen_live   += gcThreadLiveWords(0,g,rc->gc_thread);
+        gen_blocks += gcThreadLiveBlocks(0,g,rc->gc_thread);
 
         debugBelch("%5d %7" FMT_Word " %9d", g, (W_)gen->max_blocks, mut);
 

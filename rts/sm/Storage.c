@@ -133,37 +133,37 @@ initStorage (void)
   ACQUIRE_SM_LOCK;
 
   /* allocate generation info array */
-  generations = (generation *)stgMallocBytes(RtsFlags.GcFlags.generations 
-                                             * sizeof(struct generation_),
-                                             "initStorage: gens");
+  //generations = (generation *)stgMallocBytes(RtsFlags.GcFlags.generations 
+  //                                           * sizeof(struct generation_),
+  //                                           "initStorage: gens");
 
   /* Initialise all generations */
-  for(g = 0; g < RtsFlags.GcFlags.generations; g++) {
-      initGeneration(&generations[g], g);
-  }
+  //for(g = 0; g < RtsFlags.GcFlags.generations; g++) {
+  //    initGeneration(&generations[g], g);
+  //}
 
   /* A couple of convenience pointers */
-  g0 = &generations[0];
-  oldest_gen = &generations[RtsFlags.GcFlags.generations-1];
+  //g0 = &generations[0];
+  //oldest_gen = &generations[RtsFlags.GcFlags.generations-1];
 
   /* Set up the destination pointers in each younger gen. step */
-  for (g = 0; g < RtsFlags.GcFlags.generations-1; g++) {
-      generations[g].to = &generations[g+1];
-  }
-  oldest_gen->to = oldest_gen;
+  //for (g = 0; g < RtsFlags.GcFlags.generations-1; g++) {
+  //    generations[g].to = &generations[g+1];
+  //}
+  //oldest_gen->to = oldest_gen;
   
   /* The oldest generation has one step. */
-  if (RtsFlags.GcFlags.compact || RtsFlags.GcFlags.sweep) {
-      if (RtsFlags.GcFlags.generations == 1) {
-          errorBelch("WARNING: compact/sweep is incompatible with -G1; disabled");
-      } else {
-          oldest_gen->mark = 1;
-          if (RtsFlags.GcFlags.compact)
-              oldest_gen->compact = 1;
-      }
-  }
+  //if (RtsFlags.GcFlags.compact || RtsFlags.GcFlags.sweep) {
+  //    if (RtsFlags.GcFlags.generations == 1) {
+  //        errorBelch("WARNING: compact/sweep is incompatible with -G1; disabled");
+  //    } else {
+  //        oldest_gen->mark = 1;
+  //        if (RtsFlags.GcFlags.compact)
+  //            oldest_gen->compact = 1;
+  //    }
+  //}
 
-  generations[0].max_blocks = 0;
+  //generations[0].max_blocks = 0;
 
   dyn_caf_list = (StgIndStatic*)END_OF_CAF_LIST;
   debug_caf_list = (StgIndStatic*)END_OF_CAF_LIST;
@@ -346,6 +346,8 @@ newCAF(StgRegTable *reg, StgIndStatic *caf)
     bh = lockCAF(reg, caf);
     if (!bh) return NULL;
 
+    ResourceContainer *rc = reg->rCurrentTSO->rc;
+
     if(keepCAFs)
     {
         // Note [dyn_caf_list]
@@ -367,9 +369,9 @@ newCAF(StgRegTable *reg, StgIndStatic *caf)
     else
     {
         // Put this CAF on the mutable list for the old generation.
-        if (oldest_gen->no != 0) {
+        if (rc->generations[1]->no != 0) {
             recordMutableCap((StgClosure*)caf,
-                             regTableToCapability(reg), oldest_gen->no);
+                             regTableToCapability(reg), rc->generations[1]->no);
         }
 
 #ifdef DEBUG
@@ -462,6 +464,8 @@ allocNursery (bdescr *tail, W_ blocks, ResourceContainer *rc)
     bdescr *bd = NULL;
     W_ i, n;
 
+    generation *gen = rc->generations[0];
+
     // We allocate the nursery as a single contiguous block and then
     // divide it into single blocks manually.  This way we guarantee
     // that the nursery blocks are adjacent, so that the processor's
@@ -479,7 +483,7 @@ allocNursery (bdescr *tail, W_ blocks, ResourceContainer *rc)
         blocks -= n;
 
         for (i = 0; i < n; i++) {
-            initBdescr(&bd[i], g0, g0, rc);
+            initBdescr(&bd[i], gen, gen, rc);
 
             bd[i].blocks = 1;
             bd[i].flags = 0;
@@ -520,7 +524,7 @@ countNurseryBlocks (void)
     return blocks;
 }
 
-static int
+int
 resizeNursery (nursery *nursery, W_ blocks)
 {
   bdescr *bd;
@@ -532,8 +536,7 @@ resizeNursery (nursery *nursery, W_ blocks)
   if (nursery_blocks < blocks) {
       debugTrace(DEBUG_gc, "increasing size of nursery to %d blocks", 
                  blocks);
-    nursery->blocks = allocNursery(nursery->blocks, 1, nursery->rc);
-    barf("TODO: Dont use this!");
+    nursery->blocks = allocNursery(nursery->blocks, blocks-nursery_blocks, nursery->rc);
   } 
   else {
     bdescr *next_bd;
@@ -608,6 +611,8 @@ addBlockToNursery (ResourceContainer *rc, bdescr *currentNursery)
     W_ blocks;
     bdescr *bd;
 
+    generation *gen = rc->generations[0];
+
     nursery = rc->nursery;
     blocks = rc->nursery->n_blocks;
 
@@ -621,7 +626,7 @@ addBlockToNursery (ResourceContainer *rc, bdescr *currentNursery)
     W_ n = stg_min(BLOCKS_PER_MBLOCK, blocks+1);
     bd = allocLargeChunk(1, n);
     bd->rc = nursery->rc;
-    initBdescr(bd, g0, g0, nursery->rc);
+    initBdescr(bd, gen, gen, nursery->rc);
     nursery->n_blocks++;
     bd->blocks = 1;
     bd->flags = 0;
@@ -714,12 +719,20 @@ allocate (Capability *cap, W_ n)
     bdescr *bd;
     StgPtr p;
 
+    generation *gen;
+
+    debugTrace(DEBUG_gc, "ALLOCATING %d words", n);
     ResourceContainer *rc;
     if (cap->r.rCurrentTSO == NULL || cap->r.rCurrentTSO->rc == NULL) {
         rc = RC_MAIN;
     } else {
         rc = cap->r.rCurrentTSO->rc;
     }
+
+    gen = rc->generations[0];
+
+    // Lets bump the allocation count
+    rc->allocationCount++;
 
     TICK_ALLOC_HEAP_NOCTR(WDS(n));
     CCS_ALLOC(cap->r.rCCCS,n);
@@ -760,11 +773,11 @@ allocate (Capability *cap, W_ n)
         else {
             ACQUIRE_SM_LOCK
             bd = allocGroup(req_blocks);
-            dbl_link_onto(bd, &rc->large_objects);
-            rc->n_large_blocks += bd->blocks; // might be larger than req_blocks
-            rc->n_new_large_words += n;
+            dbl_link_onto(bd, &rc->generations[0]->large_objects);
+            rc->generations[0]->n_large_blocks += bd->blocks; // might be larger than req_blocks
+            rc->generations[0]->n_new_large_words += n;
             RELEASE_SM_LOCK;
-            initBdescr(bd, g0, g0, rc);
+            initBdescr(bd, gen, gen, rc);
             bd->flags = BF_LARGE;
             bd->free = bd->start + n;
             cap->total_allocated += n;
@@ -794,7 +807,7 @@ allocate (Capability *cap, W_ n)
             bd = allocBlock();
             cap->r.rNursery->n_blocks++;
             RELEASE_SM_LOCK;
-            initBdescr(bd, g0, g0, rc);
+            initBdescr(bd, gen, gen, rc);
             bd->flags = 0;
             // If we had to allocate a new block, then we'll GC
             // pretty quickly now, because MAYBE_GC() will
@@ -805,7 +818,7 @@ allocate (Capability *cap, W_ n)
             rc->free_blocks = bd->link;
             //cap->r.rNursery->n_blocks++;
             rc->nursery->n_blocks++;
-            initBdescr(bd,g0,g0,rc);
+            initBdescr(bd,gen,gen,rc);
             bd->flags = 0;
             bd->link = NULL;
         } else {
@@ -882,12 +895,18 @@ allocatePinned (Capability *cap, W_ n)
     StgPtr p;
     bdescr *bd;
 
+    generation *gen;
+
     ResourceContainer *rc;
     if (cap->r.rCurrentTSO->rc == NULL) {
         rc = RC_MAIN;
     } else {
         rc = cap->r.rCurrentTSO->rc;
     }
+
+    gen = rc->generations[0];
+
+    rc->allocationCount++;
 
     // If the request is for a large object, then allocate()
     // will give us a pinned object anyway.
@@ -946,7 +965,7 @@ allocatePinned (Capability *cap, W_ n)
             ACQUIRE_SM_LOCK;
             bd = allocBlock();
             RELEASE_SM_LOCK;
-            initBdescr(bd, g0, g0, rc);
+            initBdescr(bd, gen, gen, rc);
         } else {
             newNurseryBlock(bd);
             // we have a block in the nursery: steal it
@@ -1140,8 +1159,7 @@ W_ countOccupied (bdescr *bd)
 W_ genLiveWords (generation *gen)
 {
     // TODO: Moved to `rcLiveWords`
-    //return gen->n_words + gen->n_large_words;
-    barf("genLiveWords no longer exists. Use rcLiveWords instead");
+    return gen->n_words + gen->n_large_words;
 }
 
 W_ rcLiveWords (ResourceContainer *rc)
@@ -1150,44 +1168,47 @@ W_ rcLiveWords (ResourceContainer *rc)
     nat g;
     for(g = 0; g < numGenerations; g++) {
         n_words += rc->generations[g]->n_words;
+        n_words += rc->generations[g]->n_large_words;
     }
-    return n_words + rc->n_large_words;
+    return n_words;
 }
 
 W_ genLiveBlocks (generation *gen)
 {
-    //return gen->n_blocks + gen->n_large_blocks;
-    barf("genLiveBlocks no longer exists. Use rcLiveBlocks instead");
+    return gen->n_blocks + gen->n_large_blocks;
 }
 
 W_ rcLiveBlocks (ResourceContainer *rc)
 {
-    return rc->used_blocks +rc->n_large_blocks;
+    W_ n_blocks = 0;
+    nat g;
+    for(g = 0; g < numGenerations; g++) {
+        n_blocks += rc->generations[g]->n_blocks;
+        n_blocks += rc->generations[g]->n_large_blocks;
+    }
+    return n_blocks;
 }
 
-W_ gcThreadLiveWords (nat i, nat g)
+W_ gcThreadLiveWords (nat i, nat g, gc_thread *gt)
 {
     W_ a, b, c;
-    // TODO: Fix these once the GC is done
-    //a = countOccupied(gc_threads[i]->gens[g].todo_bd);
-    //b = gc_threads[i]->gens[g].n_part_words;
-    //c = gc_threads[i]->gens[g].n_scavd_words;
+    a = countOccupied(gt->gens[g].todo_bd);
+    b = gt->gens[g].n_part_words;
+    c = gt->gens[g].n_scavd_words;
 
 //    debugBelch("cap %d, g%d, %ld %ld %ld\n", i, g, a, b, c);
-    //return a + b + c;
-    return 0;
+    return a + b + c;
 }
 
-W_ gcThreadLiveBlocks (nat i, nat g)
+W_ gcThreadLiveBlocks (nat i, nat g, gc_thread *gt)
 {
     W_ blocks;
     // TODO: Fix these once the GC is done
-    //blocks  = countBlocks(gc_threads[i]->gens[g].todo_bd);
-    //blocks += gc_threads[i]->gens[g].n_part_blocks;
-    //blocks += gc_threads[i]->gens[g].n_scavd_blocks;
+    blocks  = countBlocks(gt->gens[g].todo_bd);
+    blocks += gt->gens[g].n_part_blocks;
+    blocks += gt->gens[g].n_scavd_blocks;
 
-    //return blocks;
-    return 0;
+    return blocks;
 }
 
 // Return an accurate count of the live data in the heap, excluding
@@ -1229,11 +1250,15 @@ W_ calcLiveBlocks (void)
  * blocks since all the data will be copied.
  */
 extern W_ 
-calcNeeded (rtsBool force_major, memcount *blocks_needed)
+calcNeeded (rtsBool force_major, memcount *blocks_needed, ResourceContainer *rc)
 {
     // TODO: This should probably not exist. We collect by RC, not gen!
-    return 2; // ==> does a major collection
-    /*
+    //return 2; // ==> does a major collection
+
+    if (rc == NULL) {
+        return 2;
+    }
+
     W_ needed = 0, blocks;
     nat g, N;
     generation *gen;
@@ -1245,7 +1270,7 @@ calcNeeded (rtsBool force_major, memcount *blocks_needed)
     }
 
     for (g = 0; g < RtsFlags.GcFlags.generations; g++) {
-        gen = &generations[g];
+        gen = &rc->generations[g];
 
         blocks = gen->n_blocks // or: gen->n_words / BLOCK_SIZE_W (?)
                + gen->n_large_blocks;
@@ -1278,7 +1303,6 @@ calcNeeded (rtsBool force_major, memcount *blocks_needed)
         *blocks_needed = needed;
     }
     return N;
-    */
 }
 
 /* ----------------------------------------------------------------------------

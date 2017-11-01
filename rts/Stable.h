@@ -35,7 +35,8 @@ StgWord lookupStableName      ( StgPtr p );
  * necessary in some contexts markStableTables is called from.
  * Consider splitting it.
  */
-void    markStableTables      ( evac_fn evac, void *user );
+void    markStableTables      ( evac_fn_rc evac, ResourceContainer *rc, bdescr *mark_stack_bd,
+  bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt );
 
 void    threadStableTables    ( evac_fn evac, void *user );
 void    gcStableTables        ( void );

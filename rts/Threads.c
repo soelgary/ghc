@@ -158,8 +158,8 @@ createThread(Capability *cap, W_ size)
      */
     ACQUIRE_LOCK(&sched_mutex);
     tso->id = next_thread_id++;  // while we have the mutex
-    tso->global_link = g0->threads;
-    g0->threads = tso;
+    tso->global_link = RC_MAIN->generations[0]->threads;
+    RC_MAIN->generations[0]->threads = tso;
     RELEASE_LOCK(&sched_mutex);
 
     // ToDo: report the stack size in the event?

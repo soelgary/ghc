@@ -695,13 +695,13 @@ checkRC(ResourceContainer *rc)
     nat g;
     for(g = 0; g < numGenerations; g++) {
         ASSERT(countBlocks(rc->generations[g]->blocks) == rc->generations[g]->n_blocks);
+        ASSERT(countBlocks(rc->generations[g]->large_objects) == rc->generations[g]->n_large_blocks);
     }
-    ASSERT(countBlocks(rc->large_objects) == rc->n_large_blocks);
 
     for(g = 0; g < numGenerations; g++) {
         checkHeapChain(rc->generations[g]->blocks);
+        checkLargeObjects(rc->generations[g]->large_objects);
     }
-    checkLargeObjects(rc->large_objects);
 }
 
 static void checkGeneration (generation *gen,
@@ -785,10 +785,13 @@ findMemoryLeak (void)
         for(g = 0; g < numGenerations; g++) {
             markBlocks(rc->mut_lists[g]);
             markBlocks(rc->generations[g]->blocks);
+            markBlocks(rc->generations[g]->large_objects);
+            markBlocks(rc->gc_thread->gens[i].part_list);
+            markBlocks(rc->gc_thread->gens[i].scavd_list);
+            markBlocks(rc->gc_thread->gens[i].todo_bd);
         }
         markBlocks(rc->nursery->blocks);
         markBlocks(rc->pinned_object_block);
-        markBlocks(rc->large_objects);
     }
 
 #ifdef PROFILING
@@ -892,8 +895,8 @@ memInventory (rtsBool show)
           gen_blocks[g] += countBlocks(rc->gc_thread->gens[g].todo_overflow);
           gen_blocks[g] += countBlocks(rc->gc_thread->gens[g].todo_large_objects);
           gen_blocks[g] += countBlocks(rc->gc_thread->gens[g].todo_bd);
+          gen_blocks[g] += countBlocks(rc->generations[g]->blocks);
       }
-      gen_blocks[g] += genBlocks(&generations[g]);
   }
 
   ResourceContainer *rc;
@@ -973,7 +976,7 @@ memInventory (rtsBool show)
 
   if (leak) {
       debugBelch("\n");
-      findMemoryLeak();
+      //findMemoryLeak();
   }
   ASSERT(n_alloc_blocks == live_blocks);
   ASSERT(!leak);

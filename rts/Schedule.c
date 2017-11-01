@@ -248,7 +248,7 @@ schedule (Capability *initialCapability, Task *task)
     case SCHED_INTERRUPTING:
         debugTrace(DEBUG_sched, "SCHED_INTERRUPTING");
         /* scheduleDoGC() deletes all the threads */
-        scheduleDoGC(&cap,task,rtsTrue,cap->r.rCurrentTSO->rc);
+        scheduleDoGC(&cap,task,rtsTrue,RC_MAIN);
 
         // after scheduleDoGC(), we must be shutting down.  Either some
         // other Capability did the final GC, or we did it above,
@@ -1184,7 +1184,7 @@ scheduleHandleHeapOverflow( Capability *cap, StgTSO *t )
 
     // if we got here because we exceeded large_alloc_lim, then
     // proceed straight to GC.
-    if (t->rc->n_new_large_words >= large_alloc_lim) {
+    if (t->rc->generations[0]->n_new_large_words >= large_alloc_lim) {
         debugTrace(DEBUG_gc, "Need to actually GC here... Large alloc limit exceeded.");
         return rtsTrue;
     }
@@ -1558,7 +1558,7 @@ scheduleDoGC (Capability **pcap, Task *task USED_IF_THREADS,
 
     // Figure out which generation we are collecting, so that we can
     // decide whether this is a parallel GC or not.
-    collect_gen = calcNeeded(force_major || heap_census, NULL);
+    collect_gen = calcNeeded(force_major || heap_census, NULL, rc);
     major_gc = (collect_gen == RtsFlags.GcFlags.generations-1);
 
 #ifdef THREADED_RTS
@@ -1827,7 +1827,7 @@ delete_threads_and_gc:
     pending_sync = 0;
     GarbageCollect(collect_gen, heap_census, gc_type, rc);
 #else
-    GarbageCollect(collect_gen, heap_census, 0, rc);
+    GarbageCollect(2, heap_census, 0, rc);
 #endif
 
     traceSparkCounters(cap);
@@ -1927,6 +1927,9 @@ delete_threads_and_gc:
     }
 #endif
 
+    rc->currentAlloc = rc->nursery->blocks;
+    cap->r.rCurrentAlloc = rc->currentAlloc;
+    cap->r.rCurrentNursery = rc->nursery->blocks;
     return;
 }
 
@@ -2261,11 +2264,15 @@ deleteAllThreads ( Capability *cap )
     StgTSO* t, *next;
     nat g;
 
-    debugTrace(DEBUG_sched,"deleting all threads");
-    for (g = 0; g < RtsFlags.GcFlags.generations; g++) {
-        for (t = generations[g].threads; t != END_TSO_QUEUE; t = next) {
-                next = t->global_link;
-                deleteThread(cap,t);
+    ResourceContainer *rc;
+
+    for(rc = RC_MAIN; rc != NULL; rc = rc->link) {
+        debugTrace(DEBUG_sched,"deleting all threads for rc %p", rc);
+        for (g = 0; g < RtsFlags.GcFlags.generations; g++) {
+            for (t = rc->generations[g]->threads; t != END_TSO_QUEUE; t = next) {
+                    next = t->global_link;
+                    deleteThread(cap,t);
+            }
         }
     }
 

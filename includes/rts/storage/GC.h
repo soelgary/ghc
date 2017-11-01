@@ -152,12 +152,6 @@ typedef struct ResourceContainer_ {
   // full pinned object blocks allocated since the last GC
   bdescr *pinned_object_blocks;
 
-  bdescr *       large_objects;       // large objects (doubly linked)
-  memcount       n_large_blocks;      // no. of blocks used by large objs
-  memcount       n_large_words;       // no. of words used by large objs
-  memcount       n_new_large_words;   // words of new large objects
-                                      // (for doYouWantToGC())
-
   bdescr *       free_blocks; // free blocks that can be used anywhere
                               // Allocation should not occur into any of these
                               // until they are moved into a nursery, large_obj,
@@ -183,6 +177,11 @@ typedef struct ResourceContainer_ {
   
   // Stats on spark creation/conversion
   SparkCounters spark_stats;
+
+  // Used for debugging the GC. We want to know how many things were allocated
+  // and how many the GC found through the roots
+  int allocationCount;
+  int foundCount;
 
 } ResourceContainer;
 
@@ -229,8 +228,6 @@ struct generation_ {
     nat par_collections;
     nat failed_promotions;
 
-    memcount       n_new_large_words; // DONT USE THIS
-
     // ------------------------------------
     // Fields below are used during GC only
 
@@ -254,6 +251,12 @@ struct generation_ {
     bdescr *       blocks;              // blocks in this RC
     memcount       n_blocks;            // number of blocks
     memcount       n_words;             // number of used words
+
+    bdescr *       large_objects;       // large objects (doubly linked)
+    memcount       n_large_blocks;      // no. of blocks used by large objs
+    memcount       n_large_words;       // no. of words used by large objs
+    memcount       n_new_large_words;   // words of new large objects
+                                        // (for doYouWantToGC())
 
     bdescr *     scavenged_large_objects;  // live large objs after GC (d-link)
     memcount     n_scavenged_large_blocks; // size (not count) of above

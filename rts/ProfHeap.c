@@ -1132,9 +1132,9 @@ void heapCensus (Time t)
   // confusing to include the stack in a heap profile.
   ResourceContainer *rc;
   for(rc = RC_LIST; rc != NULL; rc = rc->link) {
-    heapCensusChain( census, rc->large_objects );
     for(g = 0; g < numGenerations; g++) {
         heapCensusChain( census, rc->generations[g]->blocks );
+        heapCensusChain( census, rc->generations[g]->large_objects );
     }
   }
   for (g = 0; g < RtsFlags.GcFlags.generations; g++) {

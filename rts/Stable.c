@@ -473,9 +473,10 @@ getStablePtr(StgPtr p)
     } while(0)
 
 STATIC_INLINE void
-markStablePtrTable(evac_fn evac, void *user)
+markStablePtrTable(evac_fn_rc evac, ResourceContainer *rc, bdescr *mark_stack_bd,
+    bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt)
 {
-    FOR_EACH_STABLE_PTR(p, evac(user, (StgClosure **)&p->addr););
+    FOR_EACH_STABLE_PTR(p, evac(rc, (StgClosure **)&p->addr, rc, 0, mark_stack_bd, mark_stack_top_bd, mark_sp, gt););
 }
 
 STATIC_INLINE void
@@ -486,14 +487,15 @@ rememberOldStableNameAddresses(void)
 }
 
 void
-markStableTables(evac_fn evac, void *user)
+markStableTables(evac_fn_rc evac, ResourceContainer *rc, bdescr *mark_stack_bd,
+    bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt)
 {
     /* Since no other thread can currently be dereferencing a stable pointer, it
      * is safe to free the old versions of the table.
      */
     freeOldSPTs();
 
-    markStablePtrTable(evac, user);
+    markStablePtrTable(evac, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
     rememberOldStableNameAddresses();
 }
 

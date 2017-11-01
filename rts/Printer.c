@@ -784,14 +784,11 @@ findPtr(P_ p, int follow)
         bd = rc->generations[g]->blocks;
         i = findPtrBlocks(p,bd,arr,arr_size,i);
         if (i >= arr_size) return;
+        bd = rc->generations[0]->large_objects;
+        i = findPtrBlocks(p,bd,arr,arr_size,i);
       }
   }
 
-  for (rc = RC_LIST; rc != NULL; rc = rc->link) {
-      bd = rc->large_objects;
-      i = findPtrBlocks(p,bd,arr,arr_size,i);
-      if (i >= arr_size) return;
-  }
   if (follow && i == 1) {
       debugBelch("-->\n");
       findPtr(arr[0], 1);

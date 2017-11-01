@@ -1007,7 +1007,8 @@ markCapability (evac_fn evac, void *user, Capability *cap,
 
 #if defined(THREADED_RTS)
     if (!no_mark_sparks) {
-        traverseSparkQueue (evac, user, cap);
+        barf("Should never be called");
+        // traverseSparkQueue (evac, user, cap);
     }
 #endif
 

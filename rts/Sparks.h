@@ -34,7 +34,10 @@ INLINE_HEADER rtsBool      fizzledSpark  (StgClosure *);
 void         freeSparkPool     (SparkPool *pool);
 void         createSparkThread (Capability *cap);
 void         traverseSparkQueue(evac_fn evac, void *user, Capability *cap);
-void         pruneSparkQueue   (Capability *cap);
+void         traverseSparkQueueRC(evac_fn_rc evac, ResourceContainer *rc,
+    nat genNumber, bdescr *mark_stack_bd, bdescr *mark_stack_top_bd,
+    StgPtr mark_sp, gc_thread *gt);
+void         pruneSparkQueue   (ResourceContainer *rc);
 
 INLINE_HEADER void discardSparks  (SparkPool *pool);
 INLINE_HEADER long sparkPoolSize  (SparkPool *pool);

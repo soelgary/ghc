@@ -79,6 +79,7 @@ void dirty_TVAR(Capability *cap, StgTVar *p);
 extern nursery *nurseries;
 extern nat n_nurseries;
 
+int      resizeNursery        ( nursery *nursery, W_ blocks);
 void     resetNurseries       ( void );
 void     clearNursery         ( Capability *cap );
 void     resizeNurseries      ( W_ blocks );
@@ -114,10 +115,10 @@ StgWord calcTotalAllocated   (void);
 
 W_    countLargeAllocated  (void);
 W_    countOccupied        (bdescr *bd);
-W_    calcNeeded           (rtsBool force_major, W_ *blocks_needed);
+W_    calcNeeded           (rtsBool force_major, W_ *blocks_needed, ResourceContainer *rc);
 
-W_    gcThreadLiveWords  (nat i, nat g);
-W_    gcThreadLiveBlocks (nat i, nat g);
+W_    gcThreadLiveWords  (nat i, nat g, gc_thread *gt);
+W_    gcThreadLiveBlocks (nat i, nat g, gc_thread *gt);
 
 W_    genLiveWords  (generation *gen);
 W_    genLiveBlocks (generation *gen);

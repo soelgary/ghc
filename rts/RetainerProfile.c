@@ -1795,7 +1795,8 @@ computeRetainerSet( void )
     }
 
     // Consider roots from the stable ptr table.
-    markStableTables(retainRoot, NULL);
+    // TODO RC: markStableTables(retainRoot, NULL);
+    barf("Retainer profiling is not yet supported");
 
     // The following code resets the rs field of each unvisited mutable
     // object (computing sumOfNewCostExtra and updating costArray[] when

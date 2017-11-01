@@ -130,7 +130,8 @@ revertCAFs( void )
 }
 
 void
-markCAFs (evac_fn evac, void *user)
+markCAFs (evac_fn_rc evac, ResourceContainer *rc, bdescr *mark_stack_bd, bdescr *mark_stack_top_bd,
+          StgPtr mark_sp, gc_thread *gt)
 {
     StgIndStatic *c;
 
@@ -139,13 +140,15 @@ markCAFs (evac_fn evac, void *user)
          c = (StgIndStatic *)c->static_link)
     {
         c = (StgIndStatic *)UNTAG_STATIC_LIST_PTR(c);
-        evac(user, &c->indirectee);
+        evac(rc, &c->indirectee, rc, 0, mark_stack_bd,
+            mark_stack_top_bd, mark_sp, gt);
     }
     for (c = revertible_caf_list;
          c != (StgIndStatic*)END_OF_CAF_LIST;
          c = (StgIndStatic *)c->static_link)
     {
         c = (StgIndStatic *)UNTAG_STATIC_LIST_PTR(c);
-        evac(user, &c->indirectee);
+        evac(rc, &c->indirectee, rc, 0, mark_stack_bd,
+            mark_stack_top_bd, mark_sp, gt);
     }
 }

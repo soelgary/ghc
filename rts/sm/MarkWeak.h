@@ -24,7 +24,7 @@ void    collectFreshWeakPtrs   ( void );
 void    initWeakForGC          ( ResourceContainer *rc );
 rtsBool traverseWeakPtrList    ( ResourceContainer *rc );
 void    markWeakPtrList        ( ResourceContainer *rc, bdescr *mark_stack_bd,
-                                 bdescr *mark_stack_top_bd, StgPtr mark_sp );
+                                 bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt );
 void    scavengeLiveWeak       ( StgWeak * );
 
 #include "EndPrivate.h"

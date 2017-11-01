@@ -30,19 +30,22 @@
 
 #include "sm/MarkWeak.h"
 
-static void scavenge_stack (StgPtr p, StgPtr stack_end);
+static void scavenge_stack (StgPtr p, StgPtr stack_end, ResourceContainer *rc,
+    bdescr *mark_stack_bd, bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt);
 
 static void scavenge_large_bitmap (StgPtr p,
                                    StgLargeBitmap *large_bitmap,
-                                   StgWord size );
+                                   StgWord size, ResourceContainer *rc,
+                                   bdescr *mark_stack_bd, bdescr *mark_stack_top_bd,
+                                   StgPtr mark_sp, gc_thread *gt );
 
 #if defined(THREADED_RTS) && !defined(PARALLEL_GC)
 # define evacuate(a) evacuate1(a)
-# define scavenge_loop(rc,a,ms,sp) scavenge_loop1(rc,a,ms,sp)
-# define scavenge_block(rc,a) scavenge_block1(rc,a)
-# define scavenge_mutable_list(bd,g,gt) scavenge_mutable_list1(bd,g,gt)
+# define scavenge_loop(rc,a,ms,mst,sp) scavenge_loop1(rc,a,ms,mst,sp)
+# define scavenge_block(rc,a,ms,mst,sp) scavenge_block1(rc,a,ms,mst,sp)
+# define scavenge_mutable_list(rc,bd,g,mk_bd,mk_bd_top,sp,gt) scavenge_mutable_list1(rc,bd,g,mk_bd,mk_bd_top,sp,gt)
 # define scavenge_capability_mut_lists(cap) scavenge_capability_mut_Lists1(cap)
-# define scavenge_rc_mut_lists(rc) scavenge_rc_mut_lists1(rc)
+# define scavenge_rc_mut_lists(rc,ms,mst,sp) scavenge_rc_mut_lists1(rc,ms,mst,sp)
 #endif
 
 /* -----------------------------------------------------------------------------
@@ -50,7 +53,8 @@ static void scavenge_large_bitmap (StgPtr p,
    -------------------------------------------------------------------------- */
 
 static void
-scavengeTSO (StgTSO *tso)
+scavengeTSO (StgTSO *tso, ResourceContainer *rc, bdescr *mark_stack_bd,
+    bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt)
 {
     rtsBool saved_eager;
 
@@ -58,33 +62,35 @@ scavengeTSO (StgTSO *tso)
 
     // update the pointer from the InCall.
     if (tso->bound != NULL) {
-        // NB. We can't just set tso->bound->tso = tso, because this
-        // might be an invalid copy the TSO resulting from multiple
-        // threads evacuating the TSO simultaneously (see
-        // Evac.c:copy_tag()).  Calling evacuate() on this pointer
-        // will ensure that we update it to point to the correct copy.
-        evacuate((StgClosure **)&tso->bound->tso);
+      // NB. We can't just set tso->bound->tso = tso, because this
+      // might be an invalid copy the TSO resulting from multiple
+      // threads evacuating the TSO simultaneously (see
+      // Evac.c:copy_tag()).  Calling evacuate() on this pointer
+      // will ensure that we update it to point to the correct copy.
+      evacuate_rc((StgClosure **)&tso->bound->tso, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
     }
 
-    saved_eager = gct->eager_promotion;
-    gct->eager_promotion = rtsFalse;
+    saved_eager = gt->eager_promotion;
+    gt->eager_promotion = rtsFalse;
 
-    evacuate((StgClosure **)&tso->blocked_exceptions);
-    evacuate((StgClosure **)&tso->bq);
+    evacuate_rc((StgClosure **)&tso->blocked_exceptions,
+        rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+    evacuate_rc((StgClosure **)&tso->bq, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
 
     // scavange current transaction record
-    evacuate((StgClosure **)&tso->trec);
+    evacuate_rc((StgClosure **)&tso->trec, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
 
-    evacuate((StgClosure **)&tso->stackobj);
+    evacuate_rc((StgClosure **)&tso->stackobj, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
 
-    evacuate((StgClosure **)&tso->_link);
+    evacuate_rc((StgClosure **)&tso->_link, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
     if (   tso->why_blocked == BlockedOnMVar
         || tso->why_blocked == BlockedOnMVarRead
         || tso->why_blocked == BlockedOnBlackHole
         || tso->why_blocked == BlockedOnMsgThrowTo
         || tso->why_blocked == NotBlocked
         ) {
-        evacuate(&tso->block_info.closure);
+        evacuate_rc((StgClosure **)&tso->block_info.closure, rc,
+            mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
     }
 #ifdef THREADED_RTS
     // in the THREADED_RTS, block_info.closure must always point to a
@@ -96,16 +102,17 @@ scavengeTSO (StgTSO *tso)
     }
 #endif
 
-    tso->dirty = gct->failed_to_evac;
+    tso->dirty = gt->failed_to_evac;
 
-    gct->eager_promotion = saved_eager;
+    gt->eager_promotion = saved_eager;
 }
 
 /* -----------------------------------------------------------------------------
    Mutable arrays of pointers
    -------------------------------------------------------------------------- */
 
-static StgPtr scavenge_mut_arr_ptrs (StgMutArrPtrs *a)
+static StgPtr scavenge_mut_arr_ptrs (StgMutArrPtrs *a, ResourceContainer *rc,
+    bdescr *mark_stack_bd, bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt)
 {
     W_ m;
     rtsBool any_failed;
@@ -117,7 +124,7 @@ static StgPtr scavenge_mut_arr_ptrs (StgMutArrPtrs *a)
     {
         q = p + (1 << MUT_ARR_PTRS_CARD_BITS);
         for (; p < q; p++) {
-            evacuate((StgClosure**)p);
+            evacuate_rc((StgClosure **)p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         }
         if (gct->failed_to_evac) {
             any_failed = rtsTrue;
@@ -131,7 +138,7 @@ static StgPtr scavenge_mut_arr_ptrs (StgMutArrPtrs *a)
     q = (StgPtr)&a->payload[a->ptrs];
     if (p < q) {
         for (; p < q; p++) {
-            evacuate((StgClosure**)p);
+            evacuate_rc((StgClosure **)p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         }
         if (gct->failed_to_evac) {
             any_failed = rtsTrue;
@@ -147,7 +154,8 @@ static StgPtr scavenge_mut_arr_ptrs (StgMutArrPtrs *a)
 }
 
 // scavenge only the marked areas of a MUT_ARR_PTRS
-static StgPtr scavenge_mut_arr_ptrs_marked (StgMutArrPtrs *a)
+static StgPtr scavenge_mut_arr_ptrs_marked (StgMutArrPtrs *a, ResourceContainer *rc,
+    bdescr *mark_stack_bd, bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt)
 {
     W_ m;
     StgPtr p, q;
@@ -161,7 +169,7 @@ static StgPtr scavenge_mut_arr_ptrs_marked (StgMutArrPtrs *a)
             q = stg_min(p + (1 << MUT_ARR_PTRS_CARD_BITS),
                         (StgPtr)&a->payload[a->ptrs]);
             for (; p < q; p++) {
-                evacuate((StgClosure**)p);
+                evacuate_rc((StgClosure **)p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
             }
             if (gct->failed_to_evac) {
                 any_failed = rtsTrue;
@@ -177,11 +185,12 @@ static StgPtr scavenge_mut_arr_ptrs_marked (StgMutArrPtrs *a)
 }
 
 STATIC_INLINE StgPtr
-scavenge_small_bitmap (StgPtr p, StgWord size, StgWord bitmap)
+scavenge_small_bitmap (StgPtr p, StgWord size, StgWord bitmap, ResourceContainer *rc,
+    bdescr *mark_stack_bd, bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt)
 {
     while (size > 0) {
         if ((bitmap & 1) == 0) {
-            evacuate((StgClosure **)p);
+            evacuate_rc((StgClosure **)p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         }
         p++;
         bitmap = bitmap >> 1;
@@ -196,7 +205,8 @@ scavenge_small_bitmap (StgPtr p, StgWord size, StgWord bitmap)
    -------------------------------------------------------------------------- */
 
 STATIC_INLINE StgPtr
-scavenge_arg_block (StgFunInfoTable *fun_info, StgClosure **args)
+scavenge_arg_block (StgFunInfoTable *fun_info, StgClosure **args, ResourceContainer *rc,
+    bdescr *mark_stack_bd, bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt)
 {
     StgPtr p;
     StgWord bitmap;
@@ -210,21 +220,24 @@ scavenge_arg_block (StgFunInfoTable *fun_info, StgClosure **args)
         goto small_bitmap;
     case ARG_GEN_BIG:
         size = GET_FUN_LARGE_BITMAP(fun_info)->size;
-        scavenge_large_bitmap(p, GET_FUN_LARGE_BITMAP(fun_info), size);
+        scavenge_large_bitmap(p, GET_FUN_LARGE_BITMAP(fun_info), size, rc,
+            mark_stack_top_bd, mark_stack_top_bd, mark_sp, gt);
         p += size;
         break;
     default:
         bitmap = BITMAP_BITS(stg_arg_bitmaps[fun_info->f.fun_type]);
         size = BITMAP_SIZE(stg_arg_bitmaps[fun_info->f.fun_type]);
     small_bitmap:
-        p = scavenge_small_bitmap(p, size, bitmap);
+        p = scavenge_small_bitmap(p, size, bitmap, rc, mark_stack_bd, mark_stack_top_bd,
+            mark_sp, gt);
         break;
     }
     return p;
 }
 
 STATIC_INLINE GNUC_ATTR_HOT StgPtr
-scavenge_PAP_payload (StgClosure *fun, StgClosure **payload, StgWord size)
+scavenge_PAP_payload (StgClosure *fun, StgClosure **payload, StgWord size, ResourceContainer *rc,
+    bdescr *mark_stack_bd, bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt)
 {
     StgPtr p;
     StgWord bitmap;
@@ -239,34 +252,41 @@ scavenge_PAP_payload (StgClosure *fun, StgClosure **payload, StgWord size)
         bitmap = BITMAP_BITS(fun_info->f.b.bitmap);
         goto small_bitmap;
     case ARG_GEN_BIG:
-        scavenge_large_bitmap(p, GET_FUN_LARGE_BITMAP(fun_info), size);
+        scavenge_large_bitmap(p, GET_FUN_LARGE_BITMAP(fun_info), size, rc,
+            mark_stack_top_bd, mark_stack_top_bd, mark_sp, gt);
         p += size;
         break;
     case ARG_BCO:
-        scavenge_large_bitmap((StgPtr)payload, BCO_BITMAP(fun), size);
+        scavenge_large_bitmap((StgPtr)payload, BCO_BITMAP(fun), size, rc,
+            mark_stack_top_bd, mark_stack_top_bd, mark_sp, gt);
         p += size;
         break;
     default:
         bitmap = BITMAP_BITS(stg_arg_bitmaps[fun_info->f.fun_type]);
     small_bitmap:
-        p = scavenge_small_bitmap(p, size, bitmap);
+        p = scavenge_small_bitmap(p, size, bitmap, rc, mark_stack_bd,
+            mark_stack_top_bd, mark_sp, gt);
         break;
     }
     return p;
 }
 
 STATIC_INLINE GNUC_ATTR_HOT StgPtr
-scavenge_PAP (StgPAP *pap)
+scavenge_PAP (StgPAP *pap, ResourceContainer *rc, bdescr *mark_stack_bd,
+    bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt)
 {
-    evacuate(&pap->fun);
-    return scavenge_PAP_payload (pap->fun, pap->payload, pap->n_args);
+    evacuate_rc(&pap->fun, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+    return scavenge_PAP_payload (pap->fun, pap->payload, pap->n_args, rc,
+        mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
 }
 
 STATIC_INLINE StgPtr
-scavenge_AP (StgAP *ap)
+scavenge_AP (StgAP *ap, ResourceContainer *rc, bdescr *mark_stack_bd,
+    bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt)
 {
-    evacuate(&ap->fun);
-    return scavenge_PAP_payload (ap->fun, ap->payload, ap->n_args);
+    evacuate_rc(&ap->fun, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+    return scavenge_PAP_payload (ap->fun, ap->payload, ap->n_args, rc,
+        mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
 }
 
 /* -----------------------------------------------------------------------------
@@ -277,7 +297,8 @@ scavenge_AP (StgAP *ap)
  * pointers we get back from evacuate().
  */
 static void
-scavenge_large_srt_bitmap( StgLargeSRT *large_srt )
+scavenge_large_srt_bitmap( StgLargeSRT *large_srt, ResourceContainer *rc,
+    bdescr *mark_stack_bd, bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt )
 {
     nat i, j, size;
     StgWord bitmap;
@@ -293,7 +314,7 @@ scavenge_large_srt_bitmap( StgLargeSRT *large_srt )
         if (bitmap != 0) {
             for (j = 0; j < BITS_IN(W_); j++) {
                 if ((bitmap & 1) != 0) {
-                    evacuate(p);
+                    evacuate_rc(p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
                 }
                 p++;
                 bitmap = bitmap >> 1;
@@ -306,7 +327,7 @@ scavenge_large_srt_bitmap( StgLargeSRT *large_srt )
         bitmap = large_srt->l.bitmap[i];
         for (j = 0; j < size % BITS_IN(W_); j++) {
             if ((bitmap & 1) != 0) {
-                evacuate(p);
+                evacuate_rc(p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
             }
             p++;
             bitmap = bitmap >> 1;
@@ -319,7 +340,8 @@ scavenge_large_srt_bitmap( StgLargeSRT *large_srt )
  * never dereference it.
  */
 STATIC_INLINE GNUC_ATTR_HOT void
-scavenge_srt (StgClosure **srt, nat srt_bitmap)
+scavenge_srt (StgClosure **srt, nat srt_bitmap, ResourceContainer *rc,
+    bdescr *mark_stack_bd, bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt)
 {
   nat bitmap;
   StgClosure **p;
@@ -328,7 +350,8 @@ scavenge_srt (StgClosure **srt, nat srt_bitmap)
   p = srt;
 
   if (bitmap == (StgHalfWord)(-1)) {
-      scavenge_large_srt_bitmap( (StgLargeSRT *)srt );
+      scavenge_large_srt_bitmap( (StgLargeSRT *)srt, rc, mark_stack_bd,
+        mark_stack_top_bd, mark_sp, gt );
       return;
   }
 
@@ -344,12 +367,13 @@ scavenge_srt (StgClosure **srt, nat srt_bitmap)
           // If the SRT entry hasn't got bit 0 set, the SRT entry points to a
           // closure that's fixed at link-time, and no extra magic is required.
           if ( (W_)(*srt) & 0x1 ) {
-              evacuate( (StgClosure**) ((W_) (*srt) & ~0x1));
+              evacuate_rc((StgClosure**) ((W_) (*srt) & ~0x1), rc, mark_stack_bd,
+                mark_stack_top_bd, mark_sp, gt);
           } else {
-              evacuate(p);
+            evacuate_rc(p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
           }
 #else
-          evacuate(p);
+    evacuate_rc(p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
 #endif
       }
       p++;
@@ -359,7 +383,8 @@ scavenge_srt (StgClosure **srt, nat srt_bitmap)
 
 
 STATIC_INLINE GNUC_ATTR_HOT void
-scavenge_thunk_srt(const StgInfoTable *info)
+scavenge_thunk_srt(const StgInfoTable *info, ResourceContainer *rc,
+    bdescr *mark_stack_bd, bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt)
 {
     StgThunkInfoTable *thunk_info;
     nat bitmap;
@@ -371,12 +396,14 @@ scavenge_thunk_srt(const StgInfoTable *info)
     if (bitmap) {
         // don't read srt_offset if bitmap==0, because it doesn't exist
         // and so the memory might not be readable.
-        scavenge_srt((StgClosure **)GET_SRT(thunk_info), bitmap);
+        scavenge_srt((StgClosure **)GET_SRT(thunk_info), bitmap, rc, mark_stack_bd,
+            mark_stack_top_bd, mark_sp, gt);
     }
 }
 
 STATIC_INLINE GNUC_ATTR_HOT void
-scavenge_fun_srt(const StgInfoTable *info)
+scavenge_fun_srt(const StgInfoTable *info, ResourceContainer *rc,
+    bdescr *mark_stack_bd, bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt)
 {
     StgFunInfoTable *fun_info;
     nat bitmap;
@@ -388,7 +415,8 @@ scavenge_fun_srt(const StgInfoTable *info)
     if (bitmap) {
         // don't read srt_offset if bitmap==0, because it doesn't exist
         // and so the memory might not be readable.
-        scavenge_srt((StgClosure **)GET_FUN_SRT(fun_info), bitmap);
+        scavenge_srt((StgClosure **)GET_FUN_SRT(fun_info), bitmap, rc, mark_stack_bd,
+            mark_stack_top_bd, mark_sp, gt);
     }
 }
 
@@ -405,7 +433,7 @@ scavenge_fun_srt(const StgInfoTable *info)
    -------------------------------------------------------------------------- */
 
 static GNUC_ATTR_HOT void
-scavenge_block (ResourceContainer *rc, bdescr *bd)
+scavenge_block (ResourceContainer *rc, bdescr *bd, bdescr *mark_stack_bd, bdescr *mark_stack_top_bd, StgPtr mark_sp)
 {
   StgPtr p, q;
   StgInfoTable *info;
@@ -431,7 +459,7 @@ scavenge_block (ResourceContainer *rc, bdescr *bd)
   // time around the loop.
   while (p < bd->free || (bd == ws->todo_bd && p < ws->todo_free)) {
 
-      ASSERT(bd->link == NULL);
+    ASSERT(bd->link == NULL);
     ASSERT(LOOKS_LIKE_CLOSURE_PTR(p));
     info = get_itbl((StgClosure *)p);
 
@@ -445,9 +473,9 @@ scavenge_block (ResourceContainer *rc, bdescr *bd)
     {
         StgMVar *mvar = ((StgMVar *)p);
         gt->eager_promotion = rtsFalse;
-        evacuate((StgClosure **)&mvar->head);
-        evacuate((StgClosure **)&mvar->tail);
-        evacuate((StgClosure **)&mvar->value);
+        evacuate_rc((StgClosure **)&mvar->head, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+        evacuate_rc((StgClosure **)&mvar->tail, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+        evacuate_rc((StgClosure **)&mvar->value, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         gt->eager_promotion = saved_eager_promotion;
 
         if (gt->failed_to_evac) {
@@ -463,8 +491,8 @@ scavenge_block (ResourceContainer *rc, bdescr *bd)
     {
         StgTVar *tvar = ((StgTVar *)p);
         gt->eager_promotion = rtsFalse;
-        evacuate((StgClosure **)&tvar->current_value);
-        evacuate((StgClosure **)&tvar->first_watch_queue_entry);
+        evacuate_rc((StgClosure **)&tvar->current_value, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+        evacuate_rc((StgClosure **)&tvar->first_watch_queue_entry, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         gt->eager_promotion = saved_eager_promotion;
 
         if (gt->failed_to_evac) {
@@ -477,85 +505,85 @@ scavenge_block (ResourceContainer *rc, bdescr *bd)
     }
 
     case FUN_2_0:
-        scavenge_fun_srt(info);
-        evacuate(&((StgClosure *)p)->payload[1]);
-        evacuate(&((StgClosure *)p)->payload[0]);
+        scavenge_fun_srt(info, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+        evacuate_rc(&((StgClosure *)p)->payload[1], rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+        evacuate_rc(&((StgClosure *)p)->payload[0], rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         p += sizeofW(StgHeader) + 2;
         break;
 
     case THUNK_2_0:
-        scavenge_thunk_srt(info);
-        evacuate(&((StgThunk *)p)->payload[1]);
-        evacuate(&((StgThunk *)p)->payload[0]);
+        scavenge_thunk_srt(info, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+        evacuate_rc(&((StgThunk *)p)->payload[1], rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+        evacuate_rc(&((StgThunk *)p)->payload[0], rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         p += sizeofW(StgThunk) + 2;
         break;
 
     case CONSTR_2_0:
-        evacuate(&((StgClosure *)p)->payload[1]);
-        evacuate(&((StgClosure *)p)->payload[0]);
+        evacuate_rc(&((StgClosure *)p)->payload[1], rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+        evacuate_rc(&((StgClosure *)p)->payload[0], rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         p += sizeofW(StgHeader) + 2;
         break;
 
     case THUNK_1_0:
-        scavenge_thunk_srt(info);
-        evacuate(&((StgThunk *)p)->payload[0]);
+        scavenge_thunk_srt(info, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+        evacuate_rc(&((StgThunk *)p)->payload[0], rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         p += sizeofW(StgThunk) + 1;
         break;
 
     case FUN_1_0:
-        scavenge_fun_srt(info);
+        scavenge_fun_srt(info, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
     case CONSTR_1_0:
-        evacuate(&((StgClosure *)p)->payload[0]);
+        evacuate_rc(&((StgClosure *)p)->payload[0], rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         p += sizeofW(StgHeader) + 1;
         break;
 
     case THUNK_0_1:
-        scavenge_thunk_srt(info);
+        scavenge_thunk_srt(info, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         p += sizeofW(StgThunk) + 1;
         break;
 
     case FUN_0_1:
-        scavenge_fun_srt(info);
+        scavenge_fun_srt(info, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
     case CONSTR_0_1:
         p += sizeofW(StgHeader) + 1;
         break;
 
     case THUNK_0_2:
-        scavenge_thunk_srt(info);
+        scavenge_thunk_srt(info, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         p += sizeofW(StgThunk) + 2;
         break;
 
     case FUN_0_2:
-        scavenge_fun_srt(info);
+        scavenge_fun_srt(info, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
     case CONSTR_0_2:
         p += sizeofW(StgHeader) + 2;
         break;
 
     case THUNK_1_1:
-        scavenge_thunk_srt(info);
-        evacuate(&((StgThunk *)p)->payload[0]);
+        scavenge_thunk_srt(info, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+        evacuate_rc(&((StgThunk *)p)->payload[0], rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         p += sizeofW(StgThunk) + 2;
         break;
 
     case FUN_1_1:
-        scavenge_fun_srt(info);
+        scavenge_fun_srt(info, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
     case CONSTR_1_1:
-        evacuate(&((StgClosure *)p)->payload[0]);
+        evacuate_rc(&((StgClosure *)p)->payload[0], rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         p += sizeofW(StgHeader) + 2;
         break;
 
     case FUN:
-        scavenge_fun_srt(info);
+        scavenge_fun_srt(info, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         goto gen_obj;
 
     case THUNK:
     {
         StgPtr end;
 
-        scavenge_thunk_srt(info);
+        scavenge_thunk_srt(info, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         end = (P_)((StgThunk *)p)->payload + info->layout.payload.ptrs;
         for (p = (P_)((StgThunk *)p)->payload; p < end; p++) {
-            evacuate((StgClosure **)p);
+            evacuate_rc((StgClosure **)p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         }
         p += info->layout.payload.nptrs;
         break;
@@ -570,7 +598,7 @@ scavenge_block (ResourceContainer *rc, bdescr *bd)
 
         end = (P_)((StgClosure *)p)->payload + info->layout.payload.ptrs;
         for (p = (P_)((StgClosure *)p)->payload; p < end; p++) {
-            evacuate((StgClosure **)p);
+            evacuate_rc((StgClosure **)p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         }
         p += info->layout.payload.nptrs;
         break;
@@ -578,26 +606,26 @@ scavenge_block (ResourceContainer *rc, bdescr *bd)
 
     case BCO: {
         StgBCO *bco = (StgBCO *)p;
-        evacuate((StgClosure **)&bco->instrs);
-        evacuate((StgClosure **)&bco->literals);
-        evacuate((StgClosure **)&bco->ptrs);
+        evacuate_rc((StgClosure **)&bco->instrs, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+        evacuate_rc((StgClosure **)&bco->literals, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+        evacuate_rc((StgClosure **)&bco->ptrs, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         p += bco_sizeW(bco);
         break;
     }
 
     case IND_PERM:
     case BLACKHOLE:
-        evacuate(&((StgInd *)p)->indirectee);
+        evacuate_rc(&((StgInd *)p)->indirectee, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         p += sizeofW(StgInd);
         break;
 
     case MUT_VAR_CLEAN:
     case MUT_VAR_DIRTY:
         gt->eager_promotion = rtsFalse;
-        evacuate(&((StgMutVar *)p)->var);
+        evacuate_rc(&((StgMutVar *)p)->var, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         gt->eager_promotion = saved_eager_promotion;
 
-        if (gct->failed_to_evac) {
+        if (gt->failed_to_evac) {
             ((StgClosure *)q)->header.info = &stg_MUT_VAR_DIRTY_info;
         } else {
             ((StgClosure *)q)->header.info = &stg_MUT_VAR_CLEAN_info;
@@ -610,10 +638,10 @@ scavenge_block (ResourceContainer *rc, bdescr *bd)
         StgBlockingQueue *bq = (StgBlockingQueue *)p;
 
         gt->eager_promotion = rtsFalse;
-        evacuate(&bq->bh);
-        evacuate((StgClosure**)&bq->owner);
-        evacuate((StgClosure**)&bq->queue);
-        evacuate((StgClosure**)&bq->link);
+        evacuate_rc(&bq->bh, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+        evacuate_rc((StgClosure**)&bq->owner, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+        evacuate_rc((StgClosure**)&bq->queue, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+        evacuate_rc((StgClosure**)&bq->link, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         gt->eager_promotion = saved_eager_promotion;
 
         if (gt->failed_to_evac) {
@@ -628,7 +656,7 @@ scavenge_block (ResourceContainer *rc, bdescr *bd)
     case THUNK_SELECTOR:
     {
         StgSelector *s = (StgSelector *)p;
-        evacuate(&s->selectee);
+        evacuate_rc(&s->selectee, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         p += THUNK_SELECTOR_sizeW();
         break;
     }
@@ -638,18 +666,19 @@ scavenge_block (ResourceContainer *rc, bdescr *bd)
     {
         StgAP_STACK *ap = (StgAP_STACK *)p;
 
-        evacuate(&ap->fun);
-        scavenge_stack((StgPtr)ap->payload, (StgPtr)ap->payload + ap->size);
+        evacuate_rc(&ap->fun, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+        scavenge_stack((StgPtr)ap->payload, (StgPtr)ap->payload + ap->size, rc,
+            mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         p = (StgPtr)ap->payload + ap->size;
         break;
     }
 
     case PAP:
-        p = scavenge_PAP((StgPAP *)p);
+        p = scavenge_PAP((StgPAP *)p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         break;
 
     case AP:
-        p = scavenge_AP((StgAP *)p);
+        p = scavenge_AP((StgAP *)p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         break;
 
     case ARR_WORDS:
@@ -666,7 +695,8 @@ scavenge_block (ResourceContainer *rc, bdescr *bd)
         // avoid traversing it during minor GCs.
         gt->eager_promotion = rtsFalse;
 
-        p = scavenge_mut_arr_ptrs((StgMutArrPtrs*)p);
+        p = scavenge_mut_arr_ptrs((StgMutArrPtrs*)p, rc, mark_stack_bd,
+            mark_stack_top_bd, mark_sp, gt);
 
         if (gt->failed_to_evac) {
             ((StgClosure *)q)->header.info = &stg_MUT_ARR_PTRS_DIRTY_info;
@@ -683,7 +713,8 @@ scavenge_block (ResourceContainer *rc, bdescr *bd)
     case MUT_ARR_PTRS_FROZEN0:
         // follow everything
     {
-        p = scavenge_mut_arr_ptrs((StgMutArrPtrs*)p);
+        p = scavenge_mut_arr_ptrs((StgMutArrPtrs*)p, rc, mark_stack_bd,
+            mark_stack_top_bd, mark_sp, gt);
 
         // If we're going to put this object on the mutable list, then
         // set its info ptr to MUT_ARR_PTRS_FROZEN0 to indicate that.
@@ -708,7 +739,7 @@ scavenge_block (ResourceContainer *rc, bdescr *bd)
         gt->eager_promotion = rtsFalse;
         next = p + small_mut_arr_ptrs_sizeW((StgSmallMutArrPtrs*)p);
         for (p = (P_)((StgSmallMutArrPtrs *)p)->payload; p < next; p++) {
-            evacuate((StgClosure **)p);
+            evacuate_rc((StgClosure **)p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         }
         gt->eager_promotion = saved_eager_promotion;
 
@@ -730,7 +761,7 @@ scavenge_block (ResourceContainer *rc, bdescr *bd)
 
         next = p + small_mut_arr_ptrs_sizeW((StgSmallMutArrPtrs*)p);
         for (p = (P_)((StgSmallMutArrPtrs *)p)->payload; p < next; p++) {
-            evacuate((StgClosure **)p);
+            evacuate_rc((StgClosure **)p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         }
 
         // If we're going to put this object on the mutable list, then
@@ -745,7 +776,7 @@ scavenge_block (ResourceContainer *rc, bdescr *bd)
 
     case TSO:
     {
-        scavengeTSO((StgTSO *)p);
+        scavengeTSO((StgTSO *)p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         p += sizeofW(StgTSO);
         break;
     }
@@ -756,7 +787,8 @@ scavenge_block (ResourceContainer *rc, bdescr *bd)
 
         gt->eager_promotion = rtsFalse;
 
-        scavenge_stack(stack->sp, stack->stack + stack->stack_size);
+        scavenge_stack(stack->sp, stack->stack + stack->stack_size, rc, mark_stack_bd,
+            mark_stack_top_bd, mark_sp, gt);
         stack->dirty = gt->failed_to_evac;
         p += stack_sizeW(stack);
 
@@ -772,7 +804,7 @@ scavenge_block (ResourceContainer *rc, bdescr *bd)
 
         end = (P_)((StgClosure *)p)->payload + info->layout.payload.ptrs;
         for (p = (P_)((StgClosure *)p)->payload; p < end; p++) {
-            evacuate((StgClosure **)p);
+            evacuate_rc((StgClosure **)p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         }
         p += info->layout.payload.nptrs;
 
@@ -787,11 +819,11 @@ scavenge_block (ResourceContainer *rc, bdescr *bd)
         StgTRecChunk *tc = ((StgTRecChunk *) p);
         TRecEntry *e = &(tc -> entries[0]);
         gt->eager_promotion = rtsFalse;
-        evacuate((StgClosure **)&tc->prev_chunk);
+        evacuate_rc((StgClosure **)&tc->prev_chunk, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         for (i = 0; i < tc -> next_entry_idx; i ++, e++ ) {
-          evacuate((StgClosure **)&e->tvar);
-          evacuate((StgClosure **)&e->expected_value);
-          evacuate((StgClosure **)&e->new_value);
+          evacuate_rc((StgClosure **)&e->tvar, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+          evacuate_rc((StgClosure **)&e->expected_value, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+          evacuate_rc((StgClosure **)&e->new_value, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         }
         gt->eager_promotion = saved_eager_promotion;
         gt->failed_to_evac = rtsTrue; // mutable
@@ -837,7 +869,7 @@ scavenge_block (ResourceContainer *rc, bdescr *bd)
       push_scanned_block(bd, ws);
   }
 
-  gct->scan_bd = NULL;
+  gt->scan_bd = NULL;
 }
 /* -----------------------------------------------------------------------------
    Scavenge everything on the mark stack.
@@ -848,14 +880,14 @@ scavenge_block (ResourceContainer *rc, bdescr *bd)
    -------------------------------------------------------------------------- */
 
 static void
-scavenge_mark_stack(bdescr *mark_stack_bd, StgPtr mark_sp)
+scavenge_mark_stack(ResourceContainer *rc, bdescr *mark_stack_bd, bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt)
 {
     StgPtr p, q;
     StgInfoTable *info;
     rtsBool saved_eager_promotion;
 
-    gct->evac_gen_no = oldest_gen->no;
-    saved_eager_promotion = gct->eager_promotion;
+    gt->evac_gen_no = oldest_gen->no;
+    saved_eager_promotion = gt->eager_promotion;
 
     while ((p = pop_mark_stack(mark_stack_bd, mark_sp))) {
 
@@ -869,13 +901,13 @@ scavenge_mark_stack(bdescr *mark_stack_bd, StgPtr mark_sp)
         case MVAR_DIRTY:
         {
             StgMVar *mvar = ((StgMVar *)p);
-            gct->eager_promotion = rtsFalse;
-            evacuate((StgClosure **)&mvar->head);
-            evacuate((StgClosure **)&mvar->tail);
-            evacuate((StgClosure **)&mvar->value);
-            gct->eager_promotion = saved_eager_promotion;
+            gt->eager_promotion = rtsFalse;
+            evacuate_rc((StgClosure **)&mvar->head, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+            evacuate_rc((StgClosure **)&mvar->tail, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+            evacuate_rc((StgClosure **)&mvar->value, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+            gt->eager_promotion = saved_eager_promotion;
 
-            if (gct->failed_to_evac) {
+            if (gt->failed_to_evac) {
                 mvar->header.info = &stg_MVAR_DIRTY_info;
             } else {
                 mvar->header.info = &stg_MVAR_CLEAN_info;
@@ -886,12 +918,12 @@ scavenge_mark_stack(bdescr *mark_stack_bd, StgPtr mark_sp)
         case TVAR:
         {
             StgTVar *tvar = ((StgTVar *)p);
-            gct->eager_promotion = rtsFalse;
-            evacuate((StgClosure **)&tvar->current_value);
-            evacuate((StgClosure **)&tvar->first_watch_queue_entry);
-            gct->eager_promotion = saved_eager_promotion;
+            gt->eager_promotion = rtsFalse;
+            evacuate_rc((StgClosure **)&tvar->current_value, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+            evacuate_rc((StgClosure **)&tvar->first_watch_queue_entry, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+            gt->eager_promotion = saved_eager_promotion;
 
-            if (gct->failed_to_evac) {
+            if (gt->failed_to_evac) {
                 tvar->header.info = &stg_TVAR_DIRTY_info;
             } else {
                 tvar->header.info = &stg_TVAR_CLEAN_info;
@@ -900,47 +932,47 @@ scavenge_mark_stack(bdescr *mark_stack_bd, StgPtr mark_sp)
         }
 
         case FUN_2_0:
-            scavenge_fun_srt(info);
-            evacuate(&((StgClosure *)p)->payload[1]);
-            evacuate(&((StgClosure *)p)->payload[0]);
+            scavenge_fun_srt(info, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+            evacuate_rc(&((StgClosure *)p)->payload[1], rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+            evacuate_rc(&((StgClosure *)p)->payload[0], rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
             break;
 
         case THUNK_2_0:
-            scavenge_thunk_srt(info);
-            evacuate(&((StgThunk *)p)->payload[1]);
-            evacuate(&((StgThunk *)p)->payload[0]);
+            scavenge_thunk_srt(info, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+            evacuate_rc(&((StgThunk *)p)->payload[1], rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+            evacuate_rc(&((StgThunk *)p)->payload[0], rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
             break;
 
         case CONSTR_2_0:
-            evacuate(&((StgClosure *)p)->payload[1]);
-            evacuate(&((StgClosure *)p)->payload[0]);
+            evacuate_rc(&((StgClosure *)p)->payload[1], rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+            evacuate_rc(&((StgClosure *)p)->payload[0], rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
             break;
 
         case FUN_1_0:
         case FUN_1_1:
-            scavenge_fun_srt(info);
-            evacuate(&((StgClosure *)p)->payload[0]);
+            scavenge_fun_srt(info, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+            evacuate_rc(&((StgClosure *)p)->payload[0], rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
             break;
 
         case THUNK_1_0:
         case THUNK_1_1:
-            scavenge_thunk_srt(info);
-            evacuate(&((StgThunk *)p)->payload[0]);
+            scavenge_thunk_srt(info, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+            evacuate_rc(&((StgThunk *)p)->payload[0], rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
             break;
 
         case CONSTR_1_0:
         case CONSTR_1_1:
-            evacuate(&((StgClosure *)p)->payload[0]);
+            evacuate_rc(&((StgClosure *)p)->payload[0], rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
             break;
 
         case FUN_0_1:
         case FUN_0_2:
-            scavenge_fun_srt(info);
+            scavenge_fun_srt(info, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
             break;
 
         case THUNK_0_1:
         case THUNK_0_2:
-            scavenge_thunk_srt(info);
+            scavenge_thunk_srt(info, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
             break;
 
         case CONSTR_0_1:
@@ -948,17 +980,17 @@ scavenge_mark_stack(bdescr *mark_stack_bd, StgPtr mark_sp)
             break;
 
         case FUN:
-            scavenge_fun_srt(info);
+            scavenge_fun_srt(info, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
             goto gen_obj;
 
         case THUNK:
         {
             StgPtr end;
 
-            scavenge_thunk_srt(info);
+            scavenge_thunk_srt(info, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
             end = (P_)((StgThunk *)p)->payload + info->layout.payload.ptrs;
             for (p = (P_)((StgThunk *)p)->payload; p < end; p++) {
-                evacuate((StgClosure **)p);
+                evacuate_rc((StgClosure **)p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
             }
             break;
         }
@@ -972,16 +1004,16 @@ scavenge_mark_stack(bdescr *mark_stack_bd, StgPtr mark_sp)
 
             end = (P_)((StgClosure *)p)->payload + info->layout.payload.ptrs;
             for (p = (P_)((StgClosure *)p)->payload; p < end; p++) {
-                evacuate((StgClosure **)p);
+                evacuate_rc((StgClosure **)p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
             }
             break;
         }
 
         case BCO: {
             StgBCO *bco = (StgBCO *)p;
-            evacuate((StgClosure **)&bco->instrs);
-            evacuate((StgClosure **)&bco->literals);
-            evacuate((StgClosure **)&bco->ptrs);
+            evacuate_rc((StgClosure **)&bco->instrs, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+            evacuate_rc((StgClosure **)&bco->literals, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+            evacuate_rc((StgClosure **)&bco->ptrs, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
             break;
         }
 
@@ -993,16 +1025,16 @@ scavenge_mark_stack(bdescr *mark_stack_bd, StgPtr mark_sp)
 
         case IND:
         case BLACKHOLE:
-            evacuate(&((StgInd *)p)->indirectee);
+            evacuate_rc(&((StgInd *)p)->indirectee, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
             break;
 
         case MUT_VAR_CLEAN:
         case MUT_VAR_DIRTY: {
-            gct->eager_promotion = rtsFalse;
-            evacuate(&((StgMutVar *)p)->var);
-            gct->eager_promotion = saved_eager_promotion;
+            gt->eager_promotion = rtsFalse;
+            evacuate_rc(&((StgMutVar *)p)->var, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+            gt->eager_promotion = saved_eager_promotion;
 
-            if (gct->failed_to_evac) {
+            if (gt->failed_to_evac) {
                 ((StgClosure *)q)->header.info = &stg_MUT_VAR_DIRTY_info;
             } else {
                 ((StgClosure *)q)->header.info = &stg_MUT_VAR_CLEAN_info;
@@ -1014,14 +1046,14 @@ scavenge_mark_stack(bdescr *mark_stack_bd, StgPtr mark_sp)
         {
             StgBlockingQueue *bq = (StgBlockingQueue *)p;
 
-            gct->eager_promotion = rtsFalse;
-            evacuate(&bq->bh);
-            evacuate((StgClosure**)&bq->owner);
-            evacuate((StgClosure**)&bq->queue);
-            evacuate((StgClosure**)&bq->link);
-            gct->eager_promotion = saved_eager_promotion;
+            gt->eager_promotion = rtsFalse;
+            evacuate_rc(&bq->bh, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+            evacuate_rc(&bq->owner, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+            evacuate_rc(&bq->queue, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+            evacuate_rc(&bq->link, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+            gt->eager_promotion = saved_eager_promotion;
 
-            if (gct->failed_to_evac) {
+            if (gt->failed_to_evac) {
                 bq->header.info = &stg_BLOCKING_QUEUE_DIRTY_info;
             } else {
                 bq->header.info = &stg_BLOCKING_QUEUE_CLEAN_info;
@@ -1035,7 +1067,7 @@ scavenge_mark_stack(bdescr *mark_stack_bd, StgPtr mark_sp)
         case THUNK_SELECTOR:
         {
             StgSelector *s = (StgSelector *)p;
-            evacuate(&s->selectee);
+            evacuate_rc(&s->selectee, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
             break;
         }
 
@@ -1044,17 +1076,18 @@ scavenge_mark_stack(bdescr *mark_stack_bd, StgPtr mark_sp)
         {
             StgAP_STACK *ap = (StgAP_STACK *)p;
 
-            evacuate(&ap->fun);
-            scavenge_stack((StgPtr)ap->payload, (StgPtr)ap->payload + ap->size);
+            evacuate_rc(&ap->fun, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+            scavenge_stack((StgPtr)ap->payload, (StgPtr)ap->payload + ap->size, rc,
+                mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
             break;
         }
 
         case PAP:
-            scavenge_PAP((StgPAP *)p);
+            scavenge_PAP((StgPAP *)p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
             break;
 
         case AP:
-            scavenge_AP((StgAP *)p);
+            scavenge_AP((StgAP *)p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
             break;
 
         case MUT_ARR_PTRS_CLEAN:
@@ -1065,18 +1098,19 @@ scavenge_mark_stack(bdescr *mark_stack_bd, StgPtr mark_sp)
             // array, but if we find the array only points to objects in
             // the same or an older generation, we mark it "clean" and
             // avoid traversing it during minor GCs.
-            gct->eager_promotion = rtsFalse;
+            gt->eager_promotion = rtsFalse;
 
-            scavenge_mut_arr_ptrs((StgMutArrPtrs *)p);
+            scavenge_mut_arr_ptrs((StgMutArrPtrs *)p, rc, mark_stack_bd,
+                mark_stack_top_bd, mark_sp, gt);
 
-            if (gct->failed_to_evac) {
+            if (gt->failed_to_evac) {
                 ((StgClosure *)q)->header.info = &stg_MUT_ARR_PTRS_DIRTY_info;
             } else {
                 ((StgClosure *)q)->header.info = &stg_MUT_ARR_PTRS_CLEAN_info;
             }
 
-            gct->eager_promotion = saved_eager_promotion;
-            gct->failed_to_evac = rtsTrue; // mutable anyhow.
+            gt->eager_promotion = saved_eager_promotion;
+            gt->failed_to_evac = rtsTrue; // mutable anyhow.
             break;
         }
 
@@ -1086,11 +1120,12 @@ scavenge_mark_stack(bdescr *mark_stack_bd, StgPtr mark_sp)
         {
             StgPtr q = p;
 
-            scavenge_mut_arr_ptrs((StgMutArrPtrs *)p);
+            scavenge_mut_arr_ptrs((StgMutArrPtrs *)p, rc, mark_stack_bd,
+            mark_stack_top_bd, mark_sp, gt);
 
             // If we're going to put this object on the mutable list, then
             // set its info ptr to MUT_ARR_PTRS_FROZEN0 to indicate that.
-            if (gct->failed_to_evac) {
+            if (gt->failed_to_evac) {
                 ((StgClosure *)q)->header.info = &stg_MUT_ARR_PTRS_FROZEN0_info;
             } else {
                 ((StgClosure *)q)->header.info = &stg_MUT_ARR_PTRS_FROZEN_info;
@@ -1110,20 +1145,20 @@ scavenge_mark_stack(bdescr *mark_stack_bd, StgPtr mark_sp)
             // the same or an older generation, we mark it "clean" and
             // avoid traversing it during minor GCs.
             saved_eager = gct->eager_promotion;
-            gct->eager_promotion = rtsFalse;
+            gt->eager_promotion = rtsFalse;
             next = p + small_mut_arr_ptrs_sizeW((StgSmallMutArrPtrs*)p);
             for (p = (P_)((StgSmallMutArrPtrs *)p)->payload; p < next; p++) {
-                evacuate((StgClosure **)p);
+                evacuate_rc((StgClosure **)p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
             }
-            gct->eager_promotion = saved_eager;
+            gt->eager_promotion = saved_eager;
 
-            if (gct->failed_to_evac) {
+            if (gt->failed_to_evac) {
                 ((StgClosure *)q)->header.info = &stg_SMALL_MUT_ARR_PTRS_DIRTY_info;
             } else {
                 ((StgClosure *)q)->header.info = &stg_SMALL_MUT_ARR_PTRS_CLEAN_info;
             }
 
-            gct->failed_to_evac = rtsTrue; // mutable anyhow.
+            gt->failed_to_evac = rtsTrue; // mutable anyhow.
             break;
         }
 
@@ -1135,12 +1170,12 @@ scavenge_mark_stack(bdescr *mark_stack_bd, StgPtr mark_sp)
 
             next = p + small_mut_arr_ptrs_sizeW((StgSmallMutArrPtrs*)p);
             for (p = (P_)((StgSmallMutArrPtrs *)p)->payload; p < next; p++) {
-                evacuate((StgClosure **)p);
+                evacuate_rc((StgClosure **)p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
             }
 
             // If we're going to put this object on the mutable list, then
             // set its info ptr to SMALL_MUT_ARR_PTRS_FROZEN0 to indicate that.
-            if (gct->failed_to_evac) {
+            if (gt->failed_to_evac) {
                 ((StgClosure *)q)->header.info = &stg_SMALL_MUT_ARR_PTRS_FROZEN0_info;
             } else {
                 ((StgClosure *)q)->header.info = &stg_SMALL_MUT_ARR_PTRS_FROZEN_info;
@@ -1150,7 +1185,7 @@ scavenge_mark_stack(bdescr *mark_stack_bd, StgPtr mark_sp)
 
         case TSO:
         {
-            scavengeTSO((StgTSO*)p);
+            scavengeTSO((StgTSO*)p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
             break;
         }
 
@@ -1158,12 +1193,13 @@ scavenge_mark_stack(bdescr *mark_stack_bd, StgPtr mark_sp)
         {
             StgStack *stack = (StgStack*)p;
 
-            gct->eager_promotion = rtsFalse;
+            gt->eager_promotion = rtsFalse;
 
-            scavenge_stack(stack->sp, stack->stack + stack->stack_size);
+            scavenge_stack(stack->sp, stack->stack + stack->stack_size, rc,
+                mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
             stack->dirty = gct->failed_to_evac;
 
-            gct->eager_promotion = saved_eager_promotion;
+            gt->eager_promotion = saved_eager_promotion;
             break;
         }
 
@@ -1171,15 +1207,15 @@ scavenge_mark_stack(bdescr *mark_stack_bd, StgPtr mark_sp)
         {
             StgPtr end;
 
-            gct->eager_promotion = rtsFalse;
+            gt->eager_promotion = rtsFalse;
 
             end = (P_)((StgClosure *)p)->payload + info->layout.payload.ptrs;
             for (p = (P_)((StgClosure *)p)->payload; p < end; p++) {
-                evacuate((StgClosure **)p);
+                evacuate_rc((StgClosure **)p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
             }
 
-            gct->eager_promotion = saved_eager_promotion;
-            gct->failed_to_evac = rtsTrue; // mutable
+            gt->eager_promotion = saved_eager_promotion;
+            gt->failed_to_evac = rtsTrue; // mutable
             break;
         }
 
@@ -1188,15 +1224,15 @@ scavenge_mark_stack(bdescr *mark_stack_bd, StgPtr mark_sp)
             StgWord i;
             StgTRecChunk *tc = ((StgTRecChunk *) p);
             TRecEntry *e = &(tc -> entries[0]);
-            gct->eager_promotion = rtsFalse;
-            evacuate((StgClosure **)&tc->prev_chunk);
+            gt->eager_promotion = rtsFalse;
+            evacuate_rc((StgClosure **)&tc->prev_chunk, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
             for (i = 0; i < tc -> next_entry_idx; i ++, e++ ) {
-              evacuate((StgClosure **)&e->tvar);
-              evacuate((StgClosure **)&e->expected_value);
-              evacuate((StgClosure **)&e->new_value);
+              evacuate_rc((StgClosure **)&e->tvar, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+              evacuate_rc((StgClosure **)&e->expected_value, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+              evacuate_rc((StgClosure **)&e->new_value, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
             }
-            gct->eager_promotion = saved_eager_promotion;
-            gct->failed_to_evac = rtsTrue; // mutable
+            gt->eager_promotion = saved_eager_promotion;
+            gt->failed_to_evac = rtsTrue; // mutable
             break;
           }
 
@@ -1205,10 +1241,10 @@ scavenge_mark_stack(bdescr *mark_stack_bd, StgPtr mark_sp)
                  info->type, p);
         }
 
-        if (gct->failed_to_evac) {
-            gct->failed_to_evac = rtsFalse;
-            if (gct->evac_gen_no) {
-                // TODO RC: add this back-- recordMutableGen_GC((StgClosure *)q, gct->evac_gen_no);
+        if (gt->failed_to_evac) {
+            gt->failed_to_evac = rtsFalse;
+            if (gt->evac_gen_no) {
+                recordMutableGen_GC((StgClosure *)q, gt->evac_gen_no, gt);
             }
         }
     } // while (p = pop_mark_stack())
@@ -1223,7 +1259,7 @@ scavenge_mark_stack(bdescr *mark_stack_bd, StgPtr mark_sp)
    -------------------------------------------------------------------------- */
 
 static rtsBool
-scavenge_one(StgPtr p)
+scavenge_one(StgPtr p, ResourceContainer *rc, bdescr *mark_stack_bd, bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt)
 {
     const StgInfoTable *info;
     rtsBool no_luck;
@@ -1240,13 +1276,13 @@ scavenge_one(StgPtr p)
     case MVAR_DIRTY:
     {
         StgMVar *mvar = ((StgMVar *)p);
-        gct->eager_promotion = rtsFalse;
-        evacuate((StgClosure **)&mvar->head);
-        evacuate((StgClosure **)&mvar->tail);
-        evacuate((StgClosure **)&mvar->value);
-        gct->eager_promotion = saved_eager_promotion;
+        gt->eager_promotion = rtsFalse;
+        evacuate_rc((StgClosure **)&mvar->head, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+        evacuate_rc((StgClosure **)&mvar->tail, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+        evacuate_rc((StgClosure **)&mvar->value, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+        gt->eager_promotion = saved_eager_promotion;
 
-        if (gct->failed_to_evac) {
+        if (gt->failed_to_evac) {
             mvar->header.info = &stg_MVAR_DIRTY_info;
         } else {
             mvar->header.info = &stg_MVAR_CLEAN_info;
@@ -1258,11 +1294,11 @@ scavenge_one(StgPtr p)
     {
         StgTVar *tvar = ((StgTVar *)p);
         gct->eager_promotion = rtsFalse;
-        evacuate((StgClosure **)&tvar->current_value);
-        evacuate((StgClosure **)&tvar->first_watch_queue_entry);
-        gct->eager_promotion = saved_eager_promotion;
+        evacuate_rc((StgClosure **)&tvar->current_value, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+        evacuate_rc((StgClosure **)&tvar->first_watch_queue_entry, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+        gt->eager_promotion = saved_eager_promotion;
 
-        if (gct->failed_to_evac) {
+        if (gt->failed_to_evac) {
             tvar->header.info = &stg_TVAR_DIRTY_info;
         } else {
             tvar->header.info = &stg_TVAR_CLEAN_info;
@@ -1281,7 +1317,7 @@ scavenge_one(StgPtr p)
 
         end = (StgPtr)((StgThunk *)p)->payload + info->layout.payload.ptrs;
         for (q = (StgPtr)((StgThunk *)p)->payload; q < end; q++) {
-            evacuate((StgClosure **)q);
+            evacuate_rc((StgClosure **)q, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         }
         break;
     }
@@ -1305,7 +1341,7 @@ scavenge_one(StgPtr p)
 
         end = (StgPtr)((StgClosure *)p)->payload + info->layout.payload.ptrs;
         for (q = (StgPtr)((StgClosure *)p)->payload; q < end; q++) {
-            evacuate((StgClosure **)q);
+            evacuate_rc((StgClosure **)q, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         }
         break;
     }
@@ -1318,11 +1354,11 @@ scavenge_one(StgPtr p)
     case MUT_VAR_DIRTY: {
         StgPtr q = p;
 
-        gct->eager_promotion = rtsFalse;
-        evacuate(&((StgMutVar *)p)->var);
-        gct->eager_promotion = saved_eager_promotion;
+        gt->eager_promotion = rtsFalse;
+        evacuate_rc(&((StgMutVar *)p)->var, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+        gt->eager_promotion = saved_eager_promotion;
 
-        if (gct->failed_to_evac) {
+        if (gt->failed_to_evac) {
             ((StgClosure *)q)->header.info = &stg_MUT_VAR_DIRTY_info;
         } else {
             ((StgClosure *)q)->header.info = &stg_MUT_VAR_CLEAN_info;
@@ -1334,14 +1370,14 @@ scavenge_one(StgPtr p)
     {
         StgBlockingQueue *bq = (StgBlockingQueue *)p;
 
-        gct->eager_promotion = rtsFalse;
-        evacuate(&bq->bh);
-        evacuate((StgClosure**)&bq->owner);
-        evacuate((StgClosure**)&bq->queue);
-        evacuate((StgClosure**)&bq->link);
-        gct->eager_promotion = saved_eager_promotion;
+        gt->eager_promotion = rtsFalse;
+        evacuate_rc(&bq->bh, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+        evacuate_rc((StgClosure**)&bq->owner, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+        evacuate_rc((StgClosure**)&bq->queue, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+        evacuate_rc((StgClosure**)&bq->link, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+        gt->eager_promotion = saved_eager_promotion;
 
-        if (gct->failed_to_evac) {
+        if (gt->failed_to_evac) {
             bq->header.info = &stg_BLOCKING_QUEUE_DIRTY_info;
         } else {
             bq->header.info = &stg_BLOCKING_QUEUE_CLEAN_info;
@@ -1352,7 +1388,7 @@ scavenge_one(StgPtr p)
     case THUNK_SELECTOR:
     {
         StgSelector *s = (StgSelector *)p;
-        evacuate(&s->selectee);
+        evacuate_rc(&s->selectee, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         break;
     }
 
@@ -1360,18 +1396,19 @@ scavenge_one(StgPtr p)
     {
         StgAP_STACK *ap = (StgAP_STACK *)p;
 
-        evacuate(&ap->fun);
-        scavenge_stack((StgPtr)ap->payload, (StgPtr)ap->payload + ap->size);
+        evacuate_rc(&ap->fun, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+        scavenge_stack((StgPtr)ap->payload, (StgPtr)ap->payload + ap->size, rc,
+            mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         p = (StgPtr)ap->payload + ap->size;
         break;
     }
 
     case PAP:
-        p = scavenge_PAP((StgPAP *)p);
+        p = scavenge_PAP((StgPAP *)p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         break;
 
     case AP:
-        p = scavenge_AP((StgAP *)p);
+        p = scavenge_AP((StgAP *)p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         break;
 
     case ARR_WORDS:
@@ -1385,18 +1422,19 @@ scavenge_one(StgPtr p)
         // array, but if we find the array only points to objects in
         // the same or an older generation, we mark it "clean" and
         // avoid traversing it during minor GCs.
-        gct->eager_promotion = rtsFalse;
+        gt->eager_promotion = rtsFalse;
 
-        scavenge_mut_arr_ptrs((StgMutArrPtrs *)p);
+        scavenge_mut_arr_ptrs((StgMutArrPtrs *)p, rc, mark_stack_bd,
+            mark_stack_top_bd, mark_sp, gt);
 
-        if (gct->failed_to_evac) {
+        if (gt->failed_to_evac) {
             ((StgClosure *)p)->header.info = &stg_MUT_ARR_PTRS_DIRTY_info;
         } else {
             ((StgClosure *)p)->header.info = &stg_MUT_ARR_PTRS_CLEAN_info;
         }
 
-        gct->eager_promotion = saved_eager_promotion;
-        gct->failed_to_evac = rtsTrue;
+        gt->eager_promotion = saved_eager_promotion;
+        gt->failed_to_evac = rtsTrue;
         break;
     }
 
@@ -1404,11 +1442,12 @@ scavenge_one(StgPtr p)
     case MUT_ARR_PTRS_FROZEN0:
     {
         // follow everything
-        scavenge_mut_arr_ptrs((StgMutArrPtrs *)p);
+        scavenge_mut_arr_ptrs((StgMutArrPtrs *)p, rc, mark_stack_bd,
+            mark_stack_top_bd, mark_sp, gt);
 
         // If we're going to put this object on the mutable list, then
         // set its info ptr to MUT_ARR_PTRS_FROZEN0 to indicate that.
-        if (gct->failed_to_evac) {
+        if (gt->failed_to_evac) {
             ((StgClosure *)p)->header.info = &stg_MUT_ARR_PTRS_FROZEN0_info;
         } else {
             ((StgClosure *)p)->header.info = &stg_MUT_ARR_PTRS_FROZEN_info;
@@ -1431,17 +1470,17 @@ scavenge_one(StgPtr p)
         q = p;
         next = p + small_mut_arr_ptrs_sizeW((StgSmallMutArrPtrs*)p);
         for (p = (P_)((StgSmallMutArrPtrs *)p)->payload; p < next; p++) {
-            evacuate((StgClosure **)p);
+            evacuate_rc((StgClosure**)p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         }
-        gct->eager_promotion = saved_eager;
+        gt->eager_promotion = saved_eager;
 
-        if (gct->failed_to_evac) {
+        if (gt->failed_to_evac) {
             ((StgClosure *)q)->header.info = &stg_SMALL_MUT_ARR_PTRS_DIRTY_info;
         } else {
             ((StgClosure *)q)->header.info = &stg_SMALL_MUT_ARR_PTRS_CLEAN_info;
         }
 
-        gct->failed_to_evac = rtsTrue;
+        gt->failed_to_evac = rtsTrue;
         break;
     }
 
@@ -1453,12 +1492,12 @@ scavenge_one(StgPtr p)
 
         next = p + small_mut_arr_ptrs_sizeW((StgSmallMutArrPtrs*)p);
         for (p = (P_)((StgSmallMutArrPtrs *)p)->payload; p < next; p++) {
-            evacuate((StgClosure **)p);
+            evacuate_rc((StgClosure **)p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         }
 
         // If we're going to put this object on the mutable list, then
         // set its info ptr to SMALL_MUT_ARR_PTRS_FROZEN0 to indicate that.
-        if (gct->failed_to_evac) {
+        if (gt->failed_to_evac) {
             ((StgClosure *)q)->header.info = &stg_SMALL_MUT_ARR_PTRS_FROZEN0_info;
         } else {
             ((StgClosure *)q)->header.info = &stg_SMALL_MUT_ARR_PTRS_FROZEN_info;
@@ -1468,7 +1507,7 @@ scavenge_one(StgPtr p)
 
     case TSO:
     {
-        scavengeTSO((StgTSO*)p);
+        scavengeTSO((StgTSO*)p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         break;
     }
 
@@ -1476,12 +1515,13 @@ scavenge_one(StgPtr p)
     {
         StgStack *stack = (StgStack*)p;
 
-        gct->eager_promotion = rtsFalse;
+        gt->eager_promotion = rtsFalse;
 
-        scavenge_stack(stack->sp, stack->stack + stack->stack_size);
-        stack->dirty = gct->failed_to_evac;
+        scavenge_stack(stack->sp, stack->stack + stack->stack_size, rc, mark_stack_bd,
+            mark_stack_top_bd, mark_sp, gt);
+        stack->dirty = gt->failed_to_evac;
 
-        gct->eager_promotion = saved_eager_promotion;
+        gt->eager_promotion = saved_eager_promotion;
         break;
     }
 
@@ -1489,15 +1529,15 @@ scavenge_one(StgPtr p)
     {
         StgPtr end;
 
-        gct->eager_promotion = rtsFalse;
+        gt->eager_promotion = rtsFalse;
 
         end = (P_)((StgClosure *)p)->payload + info->layout.payload.ptrs;
         for (p = (P_)((StgClosure *)p)->payload; p < end; p++) {
-            evacuate((StgClosure **)p);
+            evacuate_rc((StgClosure **)p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         }
 
-        gct->eager_promotion = saved_eager_promotion;
-        gct->failed_to_evac = rtsTrue; // mutable
+        gt->eager_promotion = saved_eager_promotion;
+        gt->failed_to_evac = rtsTrue; // mutable
         break;
 
     }
@@ -1507,15 +1547,15 @@ scavenge_one(StgPtr p)
         StgWord i;
         StgTRecChunk *tc = ((StgTRecChunk *) p);
         TRecEntry *e = &(tc -> entries[0]);
-        gct->eager_promotion = rtsFalse;
-        evacuate((StgClosure **)&tc->prev_chunk);
+        gt->eager_promotion = rtsFalse;
+        evacuate_rc((StgClosure **)&tc->prev_chunk, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         for (i = 0; i < tc -> next_entry_idx; i ++, e++ ) {
-          evacuate((StgClosure **)&e->tvar);
-          evacuate((StgClosure **)&e->expected_value);
-          evacuate((StgClosure **)&e->new_value);
+          evacuate_rc((StgClosure **)&e->tvar, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+          evacuate_rc((StgClosure **)&e->expected_value, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+          evacuate_rc((StgClosure **)&e->new_value, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         }
-        gct->eager_promotion = saved_eager_promotion;
-        gct->failed_to_evac = rtsTrue; // mutable
+        gt->eager_promotion = saved_eager_promotion;
+        gt->failed_to_evac = rtsTrue; // mutable
         break;
       }
 
@@ -1525,7 +1565,7 @@ scavenge_one(StgPtr p)
         // on the large-object list and then gets updated.  See #3424.
     case BLACKHOLE:
     case IND_STATIC:
-        evacuate(&((StgInd *)p)->indirectee);
+        evacuate_rc(&((StgInd *)p)->indirectee, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
 
 #if 0 && defined(DEBUG)
       if (RtsFlags.DebugFlags.gc)
@@ -1558,8 +1598,8 @@ scavenge_one(StgPtr p)
         barf("scavenge_one: strange object %d", (int)(info->type));
     }
 
-    no_luck = gct->failed_to_evac;
-    gct->failed_to_evac = rtsFalse;
+    no_luck = gt->failed_to_evac;
+    gt->failed_to_evac = rtsFalse;
     return (no_luck);
 }
 
@@ -1572,13 +1612,14 @@ scavenge_one(StgPtr p)
    -------------------------------------------------------------------------- */
 
 void
-scavenge_mutable_list(bdescr *bd, generation *gen, gc_thread *gt)
+scavenge_mutable_list(ResourceContainer *rc, bdescr *bd, generation *gen,
+    bdescr *mark_stack_bd, bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt)
 {
     StgPtr p, q;
     nat gen_no;
 
     gen_no = gen->no;
-    gct->evac_gen_no = gen_no;
+    gt->evac_gen_no = gen_no;
     for (; bd != NULL; bd = bd->link) {
         for (q = bd->start; q < bd->free; q++) {
             p = (StgPtr)*q;
@@ -1638,7 +1679,8 @@ scavenge_mutable_list(bdescr *bd, generation *gen, gc_thread *gt)
                 saved_eager_promotion = gct->eager_promotion;
                 gct->eager_promotion = rtsFalse;
 
-                scavenge_mut_arr_ptrs_marked((StgMutArrPtrs *)p);
+                scavenge_mut_arr_ptrs_marked((StgMutArrPtrs *)p, rc, mark_stack_bd,
+                    mark_stack_top_bd, mark_sp, gt);
 
                 if (gct->failed_to_evac) {
                     ((StgClosure *)p)->header.info = &stg_MUT_ARR_PTRS_DIRTY_info;
@@ -1655,7 +1697,7 @@ scavenge_mutable_list(bdescr *bd, generation *gen, gc_thread *gt)
                 ;
             }
 
-            if (scavenge_one(p)) {
+            if (scavenge_one(p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt)) {
                 // didn't manage to promote everything, so put the
                 // object back on the list.
                 recordMutableGen_GC((StgClosure *)p,gen_no,gt);
@@ -1685,7 +1727,8 @@ scavenge_capability_mut_lists (Capability *cap)
 */
 
 void
-scavenge_rc_mut_lists (ResourceContainer *rc)
+scavenge_rc_mut_lists (ResourceContainer *rc, bdescr *mark_stack_bd,
+    bdescr *mark_stack_top_bd, StgPtr mark_sp)
 {
     nat g;
     /* Mutable lists from each generation > N
@@ -1695,7 +1738,8 @@ scavenge_rc_mut_lists (ResourceContainer *rc)
      * namely to reduce the likelihood of spurious old->new pointers.
      */
     for (g = numGenerations-1; g > N; g--) {
-        scavenge_mutable_list(rc->saved_mut_lists[g], &generations[g], rc->gc_thread);
+        scavenge_mutable_list(rc, rc->saved_mut_lists[g], rc->generations[g],
+            mark_stack_bd, mark_stack_top_bd, mark_sp, rc->gc_thread);
         freeChain_sync(rc->saved_mut_lists[g]);
         rc->saved_mut_lists[g] = NULL;
     }
@@ -1710,7 +1754,8 @@ scavenge_rc_mut_lists (ResourceContainer *rc)
    -------------------------------------------------------------------------- */
 
 static void
-scavenge_static(gc_thread *gt)
+scavenge_static(gc_thread *gt, ResourceContainer *rc, bdescr *mark_stack_bd,
+    bdescr *mark_stack_top_bd, StgPtr mark_sp)
 {
   StgClosure *flagged_p, *p;
   const StgInfoTable *info;
@@ -1719,7 +1764,7 @@ scavenge_static(gc_thread *gt)
 
   /* Always evacuate straight to the oldest generation for static
    * objects */
-  gt->evac_gen_no = oldest_gen->no;
+  gt->evac_gen_no = rc->generations[1]->no;
 
   /* keep going until we've scavenged all the objects on the linked
      list... */
@@ -1756,7 +1801,7 @@ scavenge_static(gc_thread *gt)
     case IND_STATIC:
       {
         StgInd *ind = (StgInd *)p;
-        evacuate(&ind->indirectee);
+        evacuate_rc(&ind->indirectee, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
 
         /* might fail to evacuate it, in which case we have to pop it
          * back on the mutable list of the oldest generation.  We
@@ -1771,11 +1816,11 @@ scavenge_static(gc_thread *gt)
       }
 
     case THUNK_STATIC:
-      scavenge_thunk_srt(info);
+      scavenge_thunk_srt(info, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
       break;
 
     case FUN_STATIC:
-      scavenge_fun_srt(info);
+      scavenge_fun_srt(info, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
       break;
 
     case CONSTR_STATIC:
@@ -1785,7 +1830,7 @@ scavenge_static(gc_thread *gt)
         next = (P_)p->payload + info->layout.payload.ptrs;
         // evacuate the pointers
         for (q = (P_)p->payload; q < next; q++) {
-            evacuate((StgClosure **)q);
+            evacuate_rc((StgClosure **)q, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         }
         break;
       }
@@ -1803,7 +1848,9 @@ scavenge_static(gc_thread *gt)
    -------------------------------------------------------------------------- */
 
 static void
-scavenge_large_bitmap( StgPtr p, StgLargeBitmap *large_bitmap, StgWord size )
+scavenge_large_bitmap( StgPtr p, StgLargeBitmap *large_bitmap, StgWord size,
+    ResourceContainer *rc, bdescr *mark_stack_bd, bdescr *mark_stack_top_bd,
+    StgPtr mark_sp, gc_thread *gt )
 {
     nat i, j, b;
     StgWord bitmap;
@@ -1816,7 +1863,7 @@ scavenge_large_bitmap( StgPtr p, StgLargeBitmap *large_bitmap, StgWord size )
         i += j;
         for (; j > 0; j--, p++) {
             if ((bitmap & 1) == 0) {
-                evacuate((StgClosure **)p);
+                evacuate_rc((StgClosure **)p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
             }
             bitmap = bitmap >> 1;
         }
@@ -1831,7 +1878,8 @@ scavenge_large_bitmap( StgPtr p, StgLargeBitmap *large_bitmap, StgWord size )
    -------------------------------------------------------------------------- */
 
 static void
-scavenge_stack(StgPtr p, StgPtr stack_end)
+scavenge_stack(StgPtr p, StgPtr stack_end, ResourceContainer *rc,
+    bdescr *mark_stack_bd, bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt)
 {
   const StgRetInfoTable* info;
   StgWord bitmap;
@@ -1885,7 +1933,7 @@ scavenge_stack(StgPtr p, StgPtr stack_end)
         StgUpdateFrame *frame = (StgUpdateFrame *)p;
         StgClosure *v;
 
-        evacuate(&frame->updatee);
+        evacuate_rc(&frame->updatee, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         v = frame->updatee;
         if (GET_CLOSURE_TAG(v) != 0 ||
             (get_itbl(v)->type != BLACKHOLE)) {
@@ -1910,11 +1958,13 @@ scavenge_stack(StgPtr p, StgPtr stack_end)
         // NOTE: the payload starts immediately after the info-ptr, we
         // don't have an StgHeader in the same sense as a heap closure.
         p++;
-        p = scavenge_small_bitmap(p, size, bitmap);
+        p = scavenge_small_bitmap(p, size, bitmap, rc, mark_stack_bd,
+            mark_stack_top_bd, mark_sp, gt);
 
     follow_srt:
         if (major_gc)
-            scavenge_srt((StgClosure **)GET_SRT(info), info->i.srt_bitmap);
+            scavenge_srt((StgClosure **)GET_SRT(info), info->i.srt_bitmap, rc,
+                mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         continue;
 
     case RET_BCO: {
@@ -1922,11 +1972,12 @@ scavenge_stack(StgPtr p, StgPtr stack_end)
         StgWord size;
 
         p++;
-        evacuate((StgClosure **)p);
+        evacuate_rc((StgClosure **)p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         bco = (StgBCO *)*p;
         p++;
         size = BCO_BITMAP_SIZE(bco);
-        scavenge_large_bitmap(p, BCO_BITMAP(bco), size);
+        scavenge_large_bitmap(p, BCO_BITMAP(bco), size, rc, mark_stack_top_bd,
+            mark_stack_top_bd, mark_sp, gt);
         p += size;
         continue;
     }
@@ -1938,7 +1989,8 @@ scavenge_stack(StgPtr p, StgPtr stack_end)
 
         size = GET_LARGE_BITMAP(&info->i)->size;
         p++;
-        scavenge_large_bitmap(p, GET_LARGE_BITMAP(&info->i), size);
+        scavenge_large_bitmap(p, GET_LARGE_BITMAP(&info->i), size, rc, mark_stack_top_bd,
+            mark_stack_top_bd, mark_sp, gt);
         p += size;
         // and don't forget to follow the SRT
         goto follow_srt;
@@ -1949,9 +2001,10 @@ scavenge_stack(StgPtr p, StgPtr stack_end)
         StgRetFun *ret_fun = (StgRetFun *)p;
         StgFunInfoTable *fun_info;
 
-        evacuate(&ret_fun->fun);
+        evacuate_rc(&ret_fun->fun, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         fun_info = get_fun_itbl(UNTAG_CLOSURE(ret_fun->fun));
-        p = scavenge_arg_block(fun_info, ret_fun->payload);
+        p = scavenge_arg_block(fun_info, ret_fun->payload, rc, mark_stack_bd,
+            mark_stack_top_bd, mark_sp, gt);
         goto follow_srt;
     }
 
@@ -1971,12 +2024,13 @@ scavenge_stack(StgPtr p, StgPtr stack_end)
   --------------------------------------------------------------------------- */
 
 static void
-scavenge_large (gen_workspace *ws)
+scavenge_large (gen_workspace *ws, ResourceContainer *rc, bdescr *mark_stack_bd,
+    bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt)
 {
     bdescr *bd;
     StgPtr p;
 
-    gct->evac_gen_no = ws->gen->no;
+    gt->evac_gen_no = ws->gen->no;
 
     bd = ws->todo_large_objects;
 
@@ -1994,14 +2048,14 @@ scavenge_large (gen_workspace *ws)
         RELEASE_SPIN_LOCK(&ws->gen->sync);
 
         p = bd->start;
-        if (scavenge_one(p)) {
+        if (scavenge_one(p, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt)) {
             if (ws->gen->no > 0) {
-                // TODO RC: add this back-- recordMutableGen_GC((StgClosure *)p, ws->gen->no);
+                recordMutableGen_GC((StgClosure *)p, ws->gen->no, gt);
             }
         }
 
         // stats
-        gct->scanned += closure_sizeW((StgClosure*)p);
+        gt->scanned += closure_sizeW((StgClosure*)p);
     }
 }
 
@@ -2025,7 +2079,8 @@ scavenge_large (gen_workspace *ws)
    ------------------------------------------------------------------------- */
 
 static rtsBool
-scavenge_find_work (ResourceContainer *rc, gc_thread *gt)
+scavenge_find_work (ResourceContainer *rc, gc_thread *gt, bdescr *mark_stack_bd,
+    bdescr *mark_stack_top_bd, StgPtr mark_sp)
 {
     int g;
     gen_workspace *ws;
@@ -2047,20 +2102,20 @@ loop:
         // scavenge everything up to the free pointer.
         if (ws->todo_bd->u.scan < ws->todo_free)
         {
-            scavenge_block(rc, ws->todo_bd);
+            scavenge_block(rc, ws->todo_bd, mark_stack_bd, mark_stack_top_bd, mark_sp);
             did_something = rtsTrue;
             break;
         }
 
         // If we have any large objects to scavenge, do them now.
         if (ws->todo_large_objects) {
-            scavenge_large(ws);
+            scavenge_large(ws, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
             did_something = rtsTrue;
             break;
         }
 
         if ((bd = grab_local_todo_block(ws)) != NULL) {
-            scavenge_block(rc, bd);
+            scavenge_block(rc, bd, mark_stack_bd, mark_stack_top_bd, mark_sp);
             did_something = rtsTrue;
             break;
         }
@@ -2076,7 +2131,7 @@ loop:
         // look for work to steal
         for (g = RtsFlags.GcFlags.generations-1; g >= 0; g--) {
             if ((bd = steal_todo_block(rc, g)) != NULL) {
-                scavenge_block(rc, bd);
+                scavenge_block(rc, bd, mark_stack_bd, mark_stack_top_bd, mark_sp);
                 did_something = rtsTrue;
                 break;
             }
@@ -2099,7 +2154,7 @@ loop:
    ------------------------------------------------------------------------- */
 
 void
-scavenge_loop(ResourceContainer *rc, gc_thread *gt, bdescr *mark_stack_bd, StgPtr mark_sp)
+scavenge_loop(ResourceContainer *rc, gc_thread *gt, bdescr *mark_stack_bd, bdescr *mark_stack_top_bd,StgPtr mark_sp)
 {
     rtsBool work_to_do;
 
@@ -2109,12 +2164,12 @@ loop:
     // scavenge static objects
     if (major_gc && gt->static_objects != END_OF_STATIC_OBJECT_LIST) {
         IF_DEBUG(sanity, checkStaticObjects(gt->static_objects));
-        scavenge_static(gt);
+        scavenge_static(gt, rc, mark_stack_bd, mark_stack_top_bd, mark_sp);
     }
 
     // scavenge objects in compacted generation
     if (mark_stack_bd != NULL && !mark_stack_empty(mark_stack_bd, mark_sp)) {
-        scavenge_mark_stack(mark_stack_bd, mark_sp);
+        scavenge_mark_stack(rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
         work_to_do = rtsTrue;
     }
 
@@ -2123,7 +2178,7 @@ loop:
     // local work.  Only if all the global work has been exhausted
     // do we start scavenging the fragments of blocks in the local
     // workspaces.
-    if (scavenge_find_work(rc, gt)) goto loop;
+    if (scavenge_find_work(rc, gt, mark_stack_bd, mark_stack_top_bd, mark_sp)) goto loop;
 
     if (work_to_do) goto loop;
 }

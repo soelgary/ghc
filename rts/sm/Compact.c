@@ -997,7 +997,8 @@ compact(StgClosure *static_objects)
     threadStableTables((evac_fn)thread_root, NULL);
 
     // the CAF list (used by GHCi)
-    markCAFs((evac_fn)thread_root, NULL);
+    // TODO RC: markCAFs((evac_fn)thread_root, NULL);
+    barf("Compact not supported yet");
 
     // 2. update forward ptrs
     for (g = 0; g < RtsFlags.GcFlags.generations; g++) {

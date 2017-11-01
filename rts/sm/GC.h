@@ -18,15 +18,20 @@
 
 #include "HeapAlloc.h"
 
+int derp();
+
 void GarbageCollect (rtsBool force_major_gc,
                      rtsBool do_heap_census,
                      nat gc_type,  ResourceContainer *rc);
 
 typedef void (*evac_fn)(void *user, StgClosure **root);
-typedef void (*evac_fn_rc)(void *user, StgClosure **root, ResourceContainer *rc, nat genNumber);
+typedef void (*evac_fn_rc)(void *user, StgClosure **root, ResourceContainer *rc,
+    nat genNumber, bdescr *mark_stack_bd, bdescr *mark_stack_top_bd,
+    StgPtr mark_sp, gc_thread *gt);
 
 StgClosure * isAlive      ( StgClosure *p );
-void         markCAFs     ( evac_fn evac, void *user );
+void         markCAFs     ( evac_fn_rc evac, ResourceContainer *rc,
+    bdescr *mark_stack_bd, bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt );
 
 extern nat N;
 extern rtsBool major_gc;

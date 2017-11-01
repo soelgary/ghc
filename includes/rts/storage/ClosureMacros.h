@@ -525,6 +525,13 @@ EXTERN_INLINE void overwritingClosure (StgClosure *p)
     if (era <= 0) return;
 #endif
 
+    //StgClosure *c = (StgClosure *)p;
+    //if(IS_FORWARDING_PTR(c->header.info)) {
+        // HACKSONHACKSONHACKS
+        // RC: It looks like someone is sweeping over a block that shouldnt be
+        //     swept.
+    //    return;
+    //}
     size = closure_sizeW(p);
 
     // For LDV profiling, we need to record the closure as dead

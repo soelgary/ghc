@@ -22,6 +22,7 @@
 #include "RtsUtils.h"
 #include "BlockAlloc.h"
 #include "OSMem.h"
+#include "Trace.h"
 
 #include <string.h>
 
@@ -347,6 +348,7 @@ allocGroup (W_ n)
         // n_alloc_blocks doesn't count the extra blocks we get in a
         // megablock group.
         n_alloc_blocks += mblocks * BLOCKS_PER_MBLOCK;
+        debugTrace(DEBUG_gc, "(4)Allocated %d (%d) blocks", n, n_alloc_blocks);
         if (n_alloc_blocks > hw_alloc_blocks) hw_alloc_blocks = n_alloc_blocks;
 
         bd = alloc_mega_group(mblocks);
@@ -356,6 +358,7 @@ allocGroup (W_ n)
     }
 
     n_alloc_blocks += n;
+    debugTrace(DEBUG_gc, "(1)Allocated %d (%d) blocks", n, n_alloc_blocks);
     if (n_alloc_blocks > hw_alloc_blocks) hw_alloc_blocks = n_alloc_blocks;
 
     ln = log_2_ceil(n);
@@ -381,6 +384,7 @@ allocGroup (W_ n)
         rem->blocks = BLOCKS_PER_MBLOCK-n;
         initGroup(rem); // init the slop
         n_alloc_blocks += rem->blocks;
+        debugTrace(DEBUG_gc, "(2)Allocated %d (%d) blocks", n, n_alloc_blocks);
         freeGroup(rem);                  // add the slop on to the free list
         goto finish;
     }
@@ -459,6 +463,7 @@ allocLargeChunk (W_ min, W_ max)
     }
 
     n_alloc_blocks += bd->blocks;
+    debugTrace(DEBUG_gc, "(3)Allocated %d (%d) blocks", bd->blocks, n_alloc_blocks);
     if (n_alloc_blocks > hw_alloc_blocks) hw_alloc_blocks = n_alloc_blocks;
 
     IF_DEBUG(sanity, memset(bd->start, 0xaa, bd->blocks * BLOCK_SIZE));
@@ -898,7 +903,7 @@ reportUnmarkedBlocks (void)
                 break;
             } else {
                 if(bd->blocks == 0) {
-                    barf("blocks is 0...");
+                    //barf("blocks is 0...");
                 }
                 bd += bd->blocks;
             }

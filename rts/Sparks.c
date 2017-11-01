@@ -86,14 +86,14 @@ newSpark (StgRegTable *reg, StgClosure *p)
  * -------------------------------------------------------------------------- */
 
 void
-pruneSparkQueue (Capability *cap)
+pruneSparkQueue (ResourceContainer *rc)
 {
     SparkPool *pool;
     StgClosurePtr spark, tmp, *elements;
     nat n, pruned_sparks; // stats only
     StgWord botInd,oldBotInd,currInd; // indices in array (always < size)
     const StgInfoTable *info;
-    ResourceContainer *rc = cap->r.rCurrentTSO->rc;
+    Capability *cap = rc->ownerTSO->cap;
 
     n = 0;
     pruned_sparks = 0;
@@ -256,13 +256,12 @@ pruneSparkQueue (Capability *cap)
 /* GC for the spark pool, called inside Capability.c for all
    capabilities in turn. Blindly "evac"s complete spark pool. */
 void
-traverseSparkQueue (evac_fn evac, void *user, Capability *cap)
+traverseSparkQueueRC (evac_fn_rc evac, ResourceContainer *rc, nat genNumber,
+    bdescr *mark_stack_bd, bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt)
 {
     StgClosure **sparkp;
     SparkPool *pool;
     StgWord top,bottom, modMask;
-
-    ResourceContainer *rc = cap->r.rCurrentTSO->rc;
 
     pool = rc->sparks;
 
@@ -273,18 +272,26 @@ traverseSparkQueue (evac_fn evac, void *user, Capability *cap)
     sparkp = (StgClosurePtr*)pool->elements;
     modMask = pool->moduloSize;
 
+    debugTrace(DEBUG_gc, "Traversing spark pool");
     while (top < bottom) {
     /* call evac for all closures in range (wrap-around via modulo)
      * In GHC-6.10, evac takes an additional 1st argument to hold a
      * GC-specific register, see rts/sm/GC.c::mark_root()
      */
-      evac( user , sparkp + (top & modMask) );
+      evac(rc, sparkp + (top & modMask), rc, genNumber, mark_stack_bd,
+        mark_stack_top_bd, mark_sp, gt);
       top++;
     }
 
     debugTrace(DEBUG_sparks,
                "traversed spark queue, len=%ld; (hd=%ld; tl=%ld)",
                sparkPoolSize(pool), pool->bottom, pool->top);
+}
+
+void
+traverseSparkQueue (evac_fn evac, void *user, Capability *cap)
+{
+    barf("Cannot traverse global spark queues");
 }
 
 /* ----------------------------------------------------------------------------
