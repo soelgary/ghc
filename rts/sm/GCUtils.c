@@ -102,7 +102,7 @@ grab_local_todo_block (gen_workspace *ws)
     }
 
     bd = popWSDeque(ws->todo_q);
-    if (bd != NULL)
+    if (bd != NULL && bd->link == NULL)
     {
         ASSERT(bd->link == NULL);
         return bd;

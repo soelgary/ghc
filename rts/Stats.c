@@ -19,6 +19,7 @@
 #include "sm/GC.h" // gc_alloc_block_sync, whitehole_spin
 #include "sm/GCThread.h"
 #include "sm/BlockAlloc.h"
+#include "ResourceLimits.h"
 
 /* huh? */
 #define BIG_STRING_LEN              512
@@ -557,8 +558,12 @@ stat_exit (void)
         GC_tot_alloc = tot_alloc;
 
         /* Count total garbage collections */
-        for (g = 0; g < RtsFlags.GcFlags.generations; g++)
-            total_collections += generations[g].collections;
+        ResourceContainer *rc;
+        for (rc = RC_MAIN; rc != NULL; rc = rc->link) {
+            for (g = 0; g < RtsFlags.GcFlags.generations; g++) {
+                total_collections += rc->generations[g]->collections;
+            }
+        }
 
         /* avoid divide by zero if tot_cpu is measured as 0.00 seconds -- SDM */
         if (tot_cpu  == 0.0)  tot_cpu = 1;

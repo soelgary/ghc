@@ -567,7 +567,7 @@ run_thread:
     }
 
     if (ready_to_gc || scheduleNeedHeapProfile(ready_to_gc)) {
-      scheduleDoGC(&cap,task,rtsFalse,t->rc);
+      scheduleDoGC(&cap,task,rtsTrue,t->rc);
     }
   } /* end of while() */
 }
@@ -936,7 +936,15 @@ scheduleDetectDeadlock (Capability **pcap, Task *task)
         // they are unreachable and will therefore be sent an
         // exception.  Any threads thus released will be immediately
         // runnable.
-        scheduleDoGC (pcap, task, rtsTrue/*force major GC*/, cap->r.rCurrentTSO->rc);
+        ResourceContainer *rc;
+        if (cap->r.rCurrentTSO != NULL) {
+            rc = cap->r.rCurrentTSO->rc;
+        } else if (cap->r.rCurrentNursery->rc != NULL) {
+            rc = cap->r.rCurrentNursery->rc;
+        } else {
+            barf("Cannot find an RC to GC");
+        }
+        scheduleDoGC (pcap, task, rtsTrue/*force major GC*/, rc);
         cap = *pcap;
         // when force_major == rtsTrue. scheduleDoGC sets
         // recent_activity to ACTIVITY_DONE_GC and turns off the timer
@@ -953,7 +961,7 @@ scheduleDetectDeadlock (Capability **pcap, Task *task)
             debugTrace(DEBUG_sched,
                        "still deadlocked, waiting for signals...");
 
-            awaitUserSignals();
+            //awaitUserSignals();
 
             if (signals_pending()) {
                 startSignalHandlers(cap);
@@ -2649,7 +2657,7 @@ exitScheduler (rtsBool wait_foreign USED_IF_THREADS)
         sched_state = SCHED_INTERRUPTING;
         Capability *cap = task->cap;
         waitForCapability(&cap,task);
-        scheduleDoGC(&cap,task,rtsTrue, NULL);
+        scheduleDoGC(&cap,task,rtsTrue, RC_MAIN);
         ASSERT(task->incall->tso == NULL);
         releaseCapability(cap);
     }

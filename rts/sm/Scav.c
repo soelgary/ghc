@@ -82,7 +82,9 @@ scavengeTSO (StgTSO *tso, ResourceContainer *rc, bdescr *mark_stack_bd,
 
     evacuate_rc((StgClosure **)&tso->stackobj, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
 
+    // TODO RC: DONT DO DIS!!!
     evacuate_rc((StgClosure **)&tso->_link, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+
     if (   tso->why_blocked == BlockedOnMVar
         || tso->why_blocked == BlockedOnMVarRead
         || tso->why_blocked == BlockedOnBlackHole

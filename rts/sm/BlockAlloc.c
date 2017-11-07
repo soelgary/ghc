@@ -569,7 +569,9 @@ freeGroup(bdescr *p)
   /* fill the block group with garbage if sanity checking is on */
   IF_DEBUG(sanity,memset(p->start, 0xaa, (W_)p->blocks * BLOCK_SIZE));
 
-  if (p->blocks == 0) barf("freeGroup: block size is zero");
+  if (p->blocks == 0) {
+      barf("freeGroup: block size is zero");
+  }
 
   if (p->blocks >= BLOCKS_PER_MBLOCK)
   {

@@ -8,7 +8,7 @@
 void takeSnapshotFrom(StgClosure **p, void *link, FILE *fd, char *source_closure);
 void snapshot_srt (StgClosure **srt, nat srt_bitmap, void *link, FILE *fd, char *source_closure);
 
-/*
+
 void
 printLine(FILE *fd, void *source, void *target, char *closure_type, char *source_closure, int last) 
 {
@@ -18,7 +18,7 @@ printLine(FILE *fd, void *source, void *target, char *closure_type, char *source
   }
   fputs("\n", fd);
 }
-*/
+/*
 void
 printLine(FILE *fd, void *source, void *target, char *closure_type, char *source_closure, int last) 
 {
@@ -26,7 +26,7 @@ printLine(FILE *fd, void *source, void *target, char *closure_type, char *source
     fprintf(fd, "p%p_%s -> p%p_%s\n", source, source_closure, target, closure_type);
   }
 }
-
+*/
 void
 snapshot_large_bitmap( StgPtr p, StgLargeBitmap *large_bitmap, StgWord size, void *link, FILE *fd, char *source_closure)
 {
@@ -401,7 +401,7 @@ takeSnapshotFrom(StgClosure **p, void *link, FILE *fd, char *source_closure)
       char *ct = "MVAR CLEAN/DIRTY";
       debugTrace(DEBUG_gc, "Found an mvar clean/dirty");
       printLine(fd, link, q, ct, source_closure, 0);
-      StgMVar *mvar = ((StgMVar *)p);
+      StgMVar *mvar = ((StgMVar *)q);
       takeSnapshotFrom((StgClosure **)&mvar->head, q, fd, ct);
       takeSnapshotFrom((StgClosure **)&mvar->tail, q, fd, ct);
       takeSnapshotFrom((StgClosure **)&mvar->value, q, fd, ct);
@@ -775,8 +775,8 @@ takeSnapshot(char *name)
   ResourceContainer *rc = RC_MAIN;
 
   fd = fopen(name, "w+");
-  //fputs("[\n", fd);
-  fputs("digraph G {\n",fd);
+  fputs("[\n", fd);
+  //fputs("digraph G {\n",fd);
   
   //printLine(fd, 0x4200005410, 0x4200005412, "blackhole", 0);
   //printLine(fd, 0x4200005410, 0x4200005415, "blackhole", 0);
@@ -786,14 +786,14 @@ takeSnapshot(char *name)
   c = (StgClosure **)(void *)&rc->ownerTSO;
   takeSnapshotFrom(c, NULL, fd, NULL);
   printLine(fd, NULL, NULL, NULL, NULL, 1);
-  //fputs("]\n", fd);
-  fputs("}", fd);
+  fputs("]\n", fd);
+  //fputs("}", fd);
   fclose(fd);
   
-  /*
+
   fd = fopen("/tmp/roots.txt", "w+");
-  //fputs("[\n", fd);
-  fputs("digraph G {\n", fd);
+  fputs("[\n", fd);
+  //fputs("digraph G {\n", fd);
   Capability *cap = rc->ownerTSO->cap;
   c = (StgClosure **)(void *)&cap->run_queue_hd;
   takeSnapshotFrom(c, NULL, fd, NULL);
@@ -812,9 +812,9 @@ takeSnapshot(char *name)
     takeSnapshotFrom(c, NULL, fd, NULL);
   }
   printLine(fd, NULL, NULL, NULL, NULL, 1);
-  //fputs("]\n", fd);
-  fputs("}", fd);
+  fputs("]\n", fd);
+  //fputs("}", fd);
   fclose(fd);
-  */
+  
 }
 

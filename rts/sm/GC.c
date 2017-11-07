@@ -213,7 +213,7 @@ GarbageCollect (nat collect_gen,
 
     n_gc_threads = 1;
 
-    //takeSnapshot("/tmp/before_gc.txt");
+    takeSnapshot("/tmp/before_gc.txt");
 
 #ifdef DEBUG
   // check for memory leaks if DEBUG is on
@@ -369,6 +369,7 @@ GarbageCollect (nat collect_gen,
              * freed blocks will probaby be quickly recycled.
              */
             if (gen->mark) {
+                barf("Compaction not supported");
                 // tack the new blocks on the end of the existing blocks
                 if (gen->old_blocks != NULL) {
                     prev = NULL;
@@ -463,7 +464,7 @@ GarbageCollect (nat collect_gen,
     }
 
     // Free any bitmaps.
-    for (g = 0; g <= collect_gen; g++) {
+    for (g = 0; g < collect_gen; g++) {
         gen = rc->generations[g];
         if (gen->bitmap != NULL) {
             freeGroup(gen->bitmap);
@@ -476,8 +477,27 @@ GarbageCollect (nat collect_gen,
     //resizeNursery(rc->nursery, 10);
     resize_nursery(rc, rc_major_gc);
 
-    //takeSnapshot("/tmp/after_gc.txt");
     //barf("GC not finished yet");
+
+    // Update the run_queue_hd and run_queue_tl forwarding ptrs
+    // This will only fix the case where there is one thread running
+    Capability *cap = rc->ownerTSO->cap;
+
+    StgTSO **hd = &rc->ownerTSO->cap->run_queue_hd;
+    StgTSO *h = *hd;
+    StgInfoTable *info = (StgInfoTable *)h->header.info;
+    if (IS_FORWARDING_PTR(info)) {
+        debugTrace(DEBUG_gc, "TSO HEAD IS A FORWARDING PTR");
+        cap->run_queue_hd = (StgTSO *)UN_FORWARDING_PTR(info);
+        debugTrace(DEBUG_gc, "FIXME: Setting the hd and tl of the run queue will fail with multiple threads!");
+        cap->run_queue_tl = (StgTSO *)UN_FORWARDING_PTR(info);
+        //info = *hd->header.info;
+    } else {
+        debugTrace(DEBUG_gc, "TSO HEAD IS NOT A FORWARDING PTR");
+    }
+    //StgClosure **hd = (StgClosure **)(void *)&rc->ownerTSO->cap->run_queue_hd;
+
+    takeSnapshot("/tmp/after_gc.txt");
 }
 
 /* -----------------------------------------------------------------------------
@@ -990,6 +1010,7 @@ prepare_collected_gen_rc(ResourceContainer *rc, nat genNumber)
 
     // for a compacted generation, we need to allocate the bitmap
     if(gen->mark) {
+        barf("Compaction not supported");
         StgWord bitmap_size;
         bdescr *bitmap_bdescr;
         StgWord *bitmap;
@@ -1114,6 +1135,7 @@ prepare_collected_gen (generation *gen)
 
     // for a compacted generation, we need to allocate the bitmap
     if (gen->mark) {
+        barf("Compaction not supported");
         StgWord bitmap_size; // in bytes
         bdescr *bitmap_bdescr;
         StgWord *bitmap;
@@ -1362,7 +1384,7 @@ static void
 resize_generations (rtsBool rc_major_gc, ResourceContainer *rc)
 {
     nat g;
-    generation *oldest_gen = &rc->generations[RtsFlags.GcFlags.generations - 1];
+    generation *oldestgen = rc->generations[RtsFlags.GcFlags.generations - 1];
 
     if (rc_major_gc && RtsFlags.GcFlags.generations > 1) {
         W_ live, size, min_alloc, words;
@@ -1370,14 +1392,14 @@ resize_generations (rtsBool rc_major_gc, ResourceContainer *rc)
         const W_ gens = RtsFlags.GcFlags.generations;
 
         // live in the oldest generations
-        if (oldest_gen->live_estimate != 0) {
-            words = oldest_gen->live_estimate;
+        if (oldestgen->live_estimate != 0) {
+            words = oldestgen->live_estimate;
         } else {
-            words = oldest_gen->n_words;
+            words = oldestgen->n_words;
         }
         // TODO: fixme
         live = (words + BLOCK_SIZE_W - 1) / BLOCK_SIZE_W +
-            oldest_gen->n_large_blocks;
+            oldestgen->n_large_blocks;
 
         // default max size for all generations except zero
         size = stg_max(live * RtsFlags.GcFlags.oldGenFactor,
@@ -1399,19 +1421,19 @@ resize_generations (rtsBool rc_major_gc, ResourceContainer *rc)
         // certain percentage of the maximum heap size (default: 30%).
         if (RtsFlags.GcFlags.compact ||
             (max > 0 &&
-             oldest_gen->n_blocks >
+             oldestgen->n_blocks >
              (RtsFlags.GcFlags.compactThreshold * max) / 100)) {
-            oldest_gen->mark = 1;
-            oldest_gen->compact = 1;
+            oldestgen->mark = 1;
+            oldestgen->compact = 1;
 //        debugBelch("compaction: on\n", live);
         } else {
-            oldest_gen->mark = 0;
-            oldest_gen->compact = 0;
+            oldestgen->mark = 0;
+            oldestgen->compact = 0;
 //        debugBelch("compaction: off\n", live);
         }
 
         if (RtsFlags.GcFlags.sweep) {
-            oldest_gen->mark = 1;
+            oldestgen->mark = 1;
         }
 
         // if we're going to go over the maximum heap size, reduce the
@@ -1427,7 +1449,7 @@ resize_generations (rtsBool rc_major_gc, ResourceContainer *rc)
                 heapOverflow();
             }
 
-            if (oldest_gen->compact) {
+            if (oldestgen->compact) {
                 if ( (size + (size - 1) * (gens - 2) * 2) + min_alloc > max ) {
                     size = (max - min_alloc) / ((gens - 1) * 2 - 1);
                 }
