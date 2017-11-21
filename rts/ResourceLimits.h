@@ -10,8 +10,12 @@
 #define RC_NORMAL       0
 #define RC_KILLED       1
 
+void pinpointSegfault();
+void pinpointSegfaultCap(Capability *cap);
+
 bdescr *allocGroupFor(W_ n, ResourceContainer *rc);
 bdescr *allocBlockFor(ResourceContainer *rc);
+bdescr *allocBlocksFor(ResourceContainer *rc, W_ n);
 
 ResourceContainer *newRC(ResourceContainer *parent);
 void killRC(ResourceContainer *rc);

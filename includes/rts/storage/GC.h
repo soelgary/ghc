@@ -182,6 +182,19 @@ typedef struct ResourceContainer_ {
   // and how many the GC found through the roots
   int allocationCount;
   int foundCount;
+  // These two lists are chained through the STATIC_LINK() fields of static
+  // objects.  Pointers are tagged with the current static_flag, so before
+  // following a pointer, untag it with UNTAG_STATIC_LIST_PTR().
+  StgClosure* static_objects;            // live static objects
+  StgClosure* scavenged_static_objects;  // static objects scavenged so far
+
+  // GC related fields
+  // 1. currentCopy is the bdescr where things are being copied into
+  //    At the start of each GC, this is the first block in the to space
+  //    The current copy ptr is todo_free
+  bdescr *currentCopy;
+  rtsBool failed_to_evac;
+  void *scavd_list;
 
 } ResourceContainer;
 

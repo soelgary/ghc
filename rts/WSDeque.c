@@ -273,7 +273,7 @@ pushWSDeque (WSDeque* q, void * elem)
              * this case, should use CASTOP. If this fails, someone else has
              * removed something, and new room will be available.
              */
-            ASSERT_WSDEQUE_INVARIANTS(q);
+          ASSERT_WSDEQUE_INVARIANTS(q);
 #endif
         }
     }

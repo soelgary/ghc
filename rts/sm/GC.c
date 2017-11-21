@@ -146,8 +146,7 @@ DECLARE_GCT
    -------------------------------------------------------------------------- */
 
 static void mark_root_rc (void *user, StgClosure **root, ResourceContainer *rc,
-                          nat genNumber,  bdescr *mark_stack_bd,
-                          bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt);
+                          nat genNumber);
 static void mark_root               (void *user, StgClosure **root);
 static void prepare_collected_gen   (generation *gen);
 static void prepare_collected_gen_rc   (ResourceContainer *rc, nat genNumber);
@@ -156,9 +155,7 @@ static void init_gc_thread          (gc_thread *t);
 static void resize_nursery          (ResourceContainer *rc, rtsBool rc_major_gc);
 static void start_gc_threads        (void);
 static void scavenge_until_all_done (void);
-static void scavenge_until_all_done_rc (ResourceContainer *rc, gc_thread *gt,
-                                        bdescr *mark_stack_bd, bdescr *mark_stack_top_bd,
-                                        StgPtr mark_sp);
+static void scavenge_until_all_done_rc (ResourceContainer *rc);
 static StgWord inc_running          (void);
 static StgWord dec_running          (void);
 static void wakeup_gc_threads       (nat me);
@@ -181,6 +178,7 @@ static void gcCAFs                  (void);
 
 int derp() { return 666; }
 
+/*
 void
 GarbageCollect (nat collect_gen,
                 rtsBool do_heap_census,
@@ -225,7 +223,7 @@ GarbageCollect (nat collect_gen,
     collectFreshWeakPtrsRC(rc);
 
     // check sanity *before* GC
-    IF_DEBUG(sanity, checkSanity(rtsFalse /* before GC */, rc_major_gc));
+    IF_DEBUG(sanity, checkSanity(rtsFalse, rc_major_gc));
 
     // gather blocks allocated using allocatePinned() from each RC
     // and put them on the rc->g0->large_object list.
@@ -247,8 +245,6 @@ GarbageCollect (nat collect_gen,
     // Prepare this gc_thread
     init_gc_thread(gt);
 
-    /* Allocate a mark stack if we're doing a major collection.
-    */
     if (rc_major_gc && rc->generations[1]->mark) {
         mark_stack_bd         = allocBlockFor(rc);
         mark_stack_top_bd     = mark_stack_bd;
@@ -261,9 +257,6 @@ GarbageCollect (nat collect_gen,
         mark_sp           = NULL;
     }
 
-    /* -----------------------------------------------------------------------
-    * follow all the roots that we know about:
-    */
 
     // the main thread is running: this prevents any other threads from
     // exiting prematurely, so we can start them now.
@@ -293,12 +286,8 @@ GarbageCollect (nat collect_gen,
     initWeakForGC(rc);
 
     // Mark the stable pointer table.
-    markStableTables(mark_root_rc, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+    //markStableTables(mark_root_rc, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
 
-    /* -------------------------------------------------------------------------
-      * Repeatedly scavenge all the areas we know about until there's no
-      * more scavenging to be done.
-    ***/
     for (;;)
     {
         scavenge_until_all_done_rc(rc, gt, mark_stack_bd, mark_stack_top_bd, mark_sp);
@@ -364,10 +353,6 @@ GarbageCollect (nat collect_gen,
 
         // for generations we collected...
         if (g <= collect_gen) {
-            /* free old memory and shift to-space into from-space for all
-             * the collected steps (except the allocation area).  These
-             * freed blocks will probaby be quickly recycled.
-             */
             if (gen->mark) {
                 barf("Compaction not supported");
                 // tack the new blocks on the end of the existing blocks
@@ -408,21 +393,12 @@ GarbageCollect (nat collect_gen,
             gen->old_blocks = NULL;
             gen->n_old_blocks = 0;
 
-            /* LARGE OBJECTS.  The current live large objects are chained on
-             * scavenged_large, having been moved during garbage
-             * collection from large_objects.  Any objects left on the
-             * large_objects list are therefore dead, so we free them here.
-            */
             freeChain(gen->large_objects);
             gen->large_objects  = gen->scavenged_large_objects;
             gen->n_large_blocks = gen->n_scavenged_large_blocks;
             gen->n_large_words  = countOccupied(gen->large_objects);
             gen->n_new_large_words = 0;
         } else { // for generations > collect_gen
-            /* For older generations, we need to append the
-             * scavenged_large_object list (i.e. large objects that have been
-             * promoted during this GC) to the large_object list for that step.
-            */
             for (bd = gen->scavenged_large_objects; bd; bd = next) {
                 next = bd->link;
                 dbl_link_onto(bd, &gen->large_objects);
@@ -491,6 +467,7 @@ GarbageCollect (nat collect_gen,
         cap->run_queue_hd = (StgTSO *)UN_FORWARDING_PTR(info);
         debugTrace(DEBUG_gc, "FIXME: Setting the hd and tl of the run queue will fail with multiple threads!");
         cap->run_queue_tl = (StgTSO *)UN_FORWARDING_PTR(info);
+        cap->r.rCurrentTSO = (StgTSO *)UN_FORWARDING_PTR(info);
         //info = *hd->header.info;
     } else {
         debugTrace(DEBUG_gc, "TSO HEAD IS NOT A FORWARDING PTR");
@@ -499,6 +476,7 @@ GarbageCollect (nat collect_gen,
 
     takeSnapshot("/tmp/after_gc.txt");
 }
+*/
 
 /* -----------------------------------------------------------------------------
    Initialise the gc_thread structures.
@@ -711,7 +689,7 @@ scavenge_until_all_done (void)
 }
 
 static void
-scavenge_until_all_done_rc (ResourceContainer *rc, gc_thread *gt, bdescr *mark_stack_bd, bdescr *mark_stack_top_bd, StgPtr mark_sp)
+scavenge_until_all_done_rc (ResourceContainer *rc)
 {
     DEBUG_ONLY( nat r );
 
@@ -719,12 +697,12 @@ scavenge_until_all_done_rc (ResourceContainer *rc, gc_thread *gt, bdescr *mark_s
 loop:
 #if defined(THREADED_RTS)
     if (n_gc_threads > 1) {
-        scavenge_loop(rc, gt, mark_stack_bd, mark_stack_top_bd, mark_sp);
+        scavenge_loop(rc);
     } else {
-        scavenge_loop1(rc, gt, mark_stack_bd, mark_stack_top_bd, mark_sp);
+        scavenge_loop1(rc);
     }
 #else
-    scavenge_loop(rc, gt, mark_stack_bd, mark_stack_top_bd, mark_sp);
+    scavenge_loop(rc);
 #endif
 
     collect_gct_blocks_rc(rc);
@@ -795,7 +773,7 @@ gcWorkerThread (Capability *cap)
     scavenge_capability_mut_lists(cap);
 
     // TODO RC -- fix mark stack here
-    scavenge_until_all_done_rc(cap->r.rCurrentTSO->rc, saved_gct, NULL, NULL, NULL);
+    scavenge_until_all_done_rc(cap->r.rCurrentTSO->rc);
 
 #ifdef THREADED_RTS
     // Now that the whole heap is marked, we discard any sparks that
@@ -1366,10 +1344,9 @@ mark_root(void *user USED_IF_THREADS, StgClosure **root)
 
 static void
 mark_root_rc(void *user USED_IF_THREADS, StgClosure **root,
-             ResourceContainer *rc, nat genNumber, bdescr *mark_stack_bd,
-             bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt)
+             ResourceContainer *rc, nat genNumber)
 {
-    evacuate_rc(root, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+    evacuate_rc(root, rc);
 }
 
 /* ----------------------------------------------------------------------------

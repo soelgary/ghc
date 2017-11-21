@@ -75,31 +75,7 @@
 #define BCO_PTR(n)    (W_)ptrs[n]
 #define BCO_LIT(n)    literals[n]
 
-#define LOAD_STACK_POINTERS                                     \
-    Sp = cap->r.rCurrentTSO->stackobj->sp;                      \
-    /* We don't change this ... */                              \
-    SpLim = tso_SpLim(cap->r.rCurrentTSO);
 
-#define SAVE_STACK_POINTERS                     \
-    cap->r.rCurrentTSO->stackobj->sp = Sp;
-
-#ifdef PROFILING
-#define LOAD_THREAD_STATE()                     \
-    LOAD_STACK_POINTERS                         \
-    cap->r.rCCCS = cap->r.rCurrentTSO->prof.cccs;
-#else
-#define LOAD_THREAD_STATE()                     \
-    LOAD_STACK_POINTERS
-#endif
-
-#ifdef PROFILING
-#define SAVE_THREAD_STATE()                     \
-    SAVE_STACK_POINTERS                         \
-    cap->r.rCurrentTSO->prof.cccs = cap->r.rCCCS;
-#else
-#define SAVE_THREAD_STATE()                     \
-    SAVE_STACK_POINTERS
-#endif
 
 // Note [Not true: ASSERT(Sp > SpLim)]
 //
@@ -229,6 +205,7 @@ HsStablePtr rts_breakpoint_io_action; // points to the IO action which is execut
 Capability *
 interpretBCO (Capability* cap)
 {
+    /*
     // Use of register here is primarily to make it clear to compilers
     // that these entities are non-aliasable.
     register StgPtr       Sp;    // local state -- stack pointer
@@ -236,7 +213,7 @@ interpretBCO (Capability* cap)
     register StgClosure   *tagged_obj = 0, *obj;
     nat n, m;
 
-    LOAD_THREAD_STATE();
+    //LOAD_THREAD_STATE();
 
     cap->r.rHpLim = (P_)1; // HpLim is the context-switch flag; when it
                            // goes to zero we must return to the scheduler.
@@ -362,7 +339,7 @@ eval_obj:
         break;
     }
 
-    case AP:    /* Copied from stg_AP_entry. */
+    case AP:    /* Copied from stg_AP_entry. *//*
     {
         nat i, words;
         StgAP *ap;
@@ -395,7 +372,7 @@ eval_obj:
 
         ENTER_CCS_THUNK(cap,ap);
 
-        /* Reload the stack */
+        /* Reload the stack *//*
         Sp -= words;
         for (i=0; i < words; i++) {
             Sp[i] = (W_)ap->payload[i];
@@ -702,7 +679,7 @@ do_apply:
 #endif
                 goto run_BCO_fun;
             }
-            else /* arity > n */ {
+            else /* arity > n *//* {
                 // build a new PAP and return it.
                 StgPAP *new_pap;
                 new_pap = (StgPAP *)allocate(cap, PAP_sizeW(pap->n_args + m));
@@ -746,7 +723,7 @@ do_apply:
             else if (arity == n) {
                 goto run_BCO_fun;
             }
-            else /* arity > n */ {
+            else /* arity > n *//* {
                 // build a PAP and return it.
                 StgPAP *pap;
                 nat i;
@@ -872,7 +849,7 @@ run_BCO_fun:
 run_BCO:
     INTERP_TICK(it_BCO_entries);
     {
-        register int       bciPtr = 0; /* instruction pointer */
+        register int       bciPtr = 0; /* instruction pointer *//*
         register StgWord16 bci;
         register StgBCO*   bco        = (StgBCO*)obj;
         register StgWord16* instrs    = (StgWord16*)(bco->instrs->payload);
@@ -885,7 +862,7 @@ run_BCO:
         IF_DEBUG(interpreter,debugBelch("bcoSize = %d\n", bcoSize));
 
 #ifdef INTERP_STATS
-        it_lastopc = 0; /* no opcode */
+        it_lastopc = 0; /* no opcode *//*
 #endif
 
     nextInsn:
@@ -920,12 +897,12 @@ run_BCO:
 
         bci = BCO_NEXT;
     /* We use the high 8 bits for flags, only the highest of which is
-     * currently allocated */
+     * currently allocated *//*
     ASSERT((bci & 0xFF00) == (bci & 0x8000));
 
     switch (bci & 0xFF) {
 
-        /* check for a breakpoint on the beginning of a let binding */
+        /* check for a breakpoint on the beginning of a let binding *//*
         case bci_BRK_FUN:
         {
             int arg1_brk_array, arg2_array_index, arg3_module_uniq;
@@ -1234,7 +1211,7 @@ run_BCO:
         case bci_SLIDE: {
             int n  = BCO_NEXT;
             int by = BCO_NEXT;
-            /* a_1, .. a_n, b_1, .. b_by, s => a_1, .. a_n, s */
+            /* a_1, .. a_n, b_1, .. b_by, s => a_1, .. a_n, s *//*
             while(--n >= 0) {
                 Sp[n+by] = Sp[n];
             }
@@ -1328,7 +1305,7 @@ run_BCO:
         }
 
         case bci_UNPACK: {
-            /* Unpack N ptr words from t.o.s constructor */
+            /* Unpack N ptr words from t.o.s constructor *//*
             int i;
             int n_words = BCO_NEXT;
             StgClosure* con = (StgClosure*)Sp[0];
@@ -1554,7 +1531,7 @@ run_BCO:
                and it may move at any time - indeed suspendThread()
                itself may do stack squeezing and move our args.
                So we make a copy of the argument block.
-            */
+            *//*
 
 #define ROUND_UP_WDS(p)  ((((StgWord)(p)) + sizeof(W_)-1)/sizeof(W_))
 
@@ -1608,7 +1585,7 @@ run_BCO:
             // stack with empty stack frames (stg_ret_v_info);
             //
             for (j = 0; j < stk_offset; j++) {
-                Sp[j] = (W_)&stg_ret_v_info; /* an empty stack frame */
+                Sp[j] = (W_)&stg_ret_v_info; /* an empty stack frame *//*
             }
 
             // save obj (pointer to the current BCO), since this
@@ -1618,7 +1595,7 @@ run_BCO:
             Sp[1] = (W_)obj;
             Sp[0] = (W_)&stg_ret_p_info;
 
-            SAVE_THREAD_STATE();
+            //SAVE_THREAD_STATE();
             tok = suspendThread(&cap->r, interruptible ? rtsTrue : rtsFalse);
 
             // We already made a copy of the arguments above.
@@ -1626,7 +1603,7 @@ run_BCO:
 
             // And restart the thread again, popping the stg_ret_p frame.
             cap = (Capability *)((void *)((unsigned char*)resumeThread(tok) - STG_FIELD_OFFSET(Capability,r)));
-            LOAD_THREAD_STATE();
+            //LOAD_THREAD_STATE();
 
             if (Sp[0] != (W_)&stg_ret_p_info) {
                 // the stack is not how we left it.  This probably
@@ -1658,7 +1635,7 @@ run_BCO:
         }
 
         case bci_JMP: {
-            /* BCO_NEXT modifies bciPtr, so be conservative. */
+            /* BCO_NEXT modifies bciPtr, so be conservative. *//*
             int nextpc = BCO_GET_LARGE_ARG;
             bciPtr     = nextpc;
             goto nextInsn;
@@ -1672,9 +1649,9 @@ run_BCO:
             barf("interpretBCO: unknown or unimplemented opcode %d",
                  (int)(bci & 0xFF));
 
-        } /* switch on opcode */
+        } /* switch on opcode *//*
     }
     }
 
-    barf("interpretBCO: fell off end of the interpreter");
+    barf("interpretBCO: fell off end of the interpreter");*/
 }

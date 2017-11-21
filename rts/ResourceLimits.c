@@ -10,6 +10,7 @@
 #include "Capability.h"
 #include "Sparks.h"
 #include "Trace.h"
+#include "WSDeque.h"
 
 ResourceContainer *RC_MAIN = NULL;
 ResourceContainer *RC_LIST = NULL;
@@ -20,7 +21,18 @@ nat min_reclaimable_count = 1;
 
 extern nat numGenerations = 2;
 
-extern nat nurserySize = 5;
+extern nat nurserySize = 50;
+
+void
+pinpointSegfault()
+{
+  debugTrace(DEBUG_sched, "Pinpointing the segfault...");
+}
+void
+pinpointSegfaultCap(Capability *cap)
+{
+  debugTrace(DEBUG_sched, "Pinpointing the segfault %p...", cap);
+}
 
 bdescr *
 allocGroupFor(W_ n, ResourceContainer *rc)
@@ -48,6 +60,28 @@ allocGroupFor(W_ n, ResourceContainer *rc)
     curr->rc = rc;
   }
   return bd;
+}
+
+
+bdescr *
+allocBlocksFor(ResourceContainer *rc, W_ n)
+{
+  bdescr *curr, *prev, *bd;
+  
+  bd = allocGroup(1);
+  prev = bd;
+  W_ count;
+  for (count = 1; count < n; count++) {
+    curr = allocGroup(1);
+    dbl_link_onto(curr, &prev);
+    prev = curr;
+  }
+  
+  for (curr = prev; curr != NULL; curr = curr->link) {
+    curr->rc = rc;
+    debugTrace(DEBUG_sched, "Set rc (%p) for bdescr (%p)", curr, rc);
+  }
+  return prev;
 }
 
 bdescr *
@@ -86,8 +120,8 @@ initRCGeneration(ResourceContainer *rc, nat genNumber)
   rc->generations[genNumber]->failed_promotions = 0;
   rc->generations[genNumber]->max_blocks = 0;
   rc->generations[genNumber]->live_estimate = 0;
-  rc->generations[genNumber]->old_blocks = NULL;
-  rc->generations[genNumber]->n_old_blocks = 0;
+  rc->generations[genNumber]->old_blocks = allocBlocksFor(rc, 100);
+  rc->generations[genNumber]->n_old_blocks = 100;
   rc->generations[genNumber]->scavenged_large_objects = NULL;
   rc->generations[genNumber]->n_scavenged_large_blocks = 0;
   rc->generations[genNumber]->mark = 0;
@@ -100,8 +134,8 @@ initRCGeneration(ResourceContainer *rc, nat genNumber)
   rc->generations[genNumber]->old_threads = END_TSO_QUEUE;
   rc->generations[genNumber]->weak_ptr_list = NULL;
   rc->generations[genNumber]->old_weak_ptr_list = NULL;
-  rc->generations[genNumber]->blocks = NULL;
-  rc->generations[genNumber]->n_blocks = 0;
+  rc->generations[genNumber]->blocks = allocBlocksFor(rc, 100);;
+  rc->generations[genNumber]->n_blocks = 100;
   rc->generations[genNumber]->n_words = 0;
   rc->generations[genNumber]->large_objects = NULL;
   rc->generations[genNumber]->n_large_blocks = 0;
@@ -244,18 +278,16 @@ newRC(ResourceContainer *parent)
 
   nursery *nurse = stgMallocBytes(sizeof(struct nursery_), "rcCreateNursery");
   memcount initialNurserySize = 20;
-  bdescr *bd = allocNursery(NULL, initialNurserySize, rc);
-  rc->generations[0]->blocks = bd;
+  //bdescr *bd = allocNursery(NULL, initialNurserySize, rc);
+  //rc->generations[0]->blocks = bd;
   rc->isDead = rtsFalse;
 
-  nurse->blocks = bd;
-  nurse->n_blocks = initialNurserySize; //TODO: Decrement used blocks by n_blocks?
+  nurse->blocks = rc->generations[0]->blocks;
+  nurse->n_blocks = 100; //TODO: Decrement used blocks by n_blocks?
   nurse->rc = rc;
 
   rc->nursery = nurse;
-  rc->currentAlloc = bd;
-  rc->generations[0]->blocks = bd;
-  rc->generations[0]->n_blocks = initialNurserySize;
+  rc->currentAlloc = rc->generations[0]->blocks;
 
   rc->pinned_object_block = NULL;
   rc->pinned_object_blocks = NULL;
@@ -276,6 +308,12 @@ newRC(ResourceContainer *parent)
   }
 
   rc->id = RC_COUNT;
+
+  rc->currentCopy = rc->generations[0]->old_blocks;
+  rc->currentCopy->u.scan = rc->currentCopy->start;
+  rc->static_objects = END_OF_STATIC_OBJECT_LIST;
+  rc->scavenged_static_objects = END_OF_STATIC_OBJECT_LIST;
+  rc->scavd_list = newWSDeque(100);
 
   initGCThread(rc);
 

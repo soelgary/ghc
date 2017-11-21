@@ -712,6 +712,39 @@ move_STACK (StgStack *src, StgStack *dest)
    the global block pool.  If we need to get memory from the OS and
    that operation fails, then the whole process will be killed.
    -------------------------------------------------------------------------- */
+/*
+StgPtr
+allocate_rc (Capability *cap, W_ n)
+{
+    bdescr *bd;
+    StgPtr p;
+
+    generation *gen;
+
+    debugTrace(DEBUG_gc, "ALLOCATING %d words", n);
+    ResourceContainer *rc;
+    if (cap->r.rCurrentTSO == NULL || cap->r.rCurrentTSO->rc == NULL) {
+        rc = RC_MAIN;
+    } else {
+        rc = cap->r.rCurrentTSO->rc;
+    }
+
+    gen = rc->generations[0];
+    rc->allocationCount++;
+
+    TICK_ALLOC_HEAP_NOCTR(WDS(n));
+    CCS_ALLOC(cap->r.rCCCS,n);
+
+    if (n >= LARGE_OBJECT_THRESHOLD/sizeof(W_)) {
+        barf("Large object allocation not supported");
+    } else {
+        bd = cap->r.rCurrentAlloc;
+        if (bd == NULL) {
+
+        }
+    }
+}
+*/
 
 StgPtr
 allocate (Capability *cap, W_ n)
@@ -866,6 +899,7 @@ allocate (Capability *cap, W_ n)
     bd->free += n;
 
     IF_DEBUG(sanity, ASSERT(*((StgWord8*)p) == 0xaa));
+    debugTrace(DEBUG_gc, "Allocating @ %p", p);
     return p;
 }
 

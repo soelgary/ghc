@@ -33,12 +33,8 @@
 #endif
 
 REGPARM1 void evacuate      (StgClosure **p);
-REGPARM1 void evacuate_rc   (StgClosure **p, ResourceContainer *rc,
-                             bdescr *mark_stack_bd, bdescr *mark_stack_top_bd,
-                             StgPtr mark_sp, gc_thread *gt);
-REGPARM1 void evacuate_rc1  (StgClosure **p, ResourceContainer *rc,
-                             bdescr *mark_stack_bd, bdescr *mark_stack_top_bd,
-                             StgPtr mark_sp, gc_thread *gt);
+REGPARM1 void evacuate_rc   (StgClosure **p, ResourceContainer *rc);
+REGPARM1 void evacuate_rc1  (StgClosure **p, ResourceContainer *rc);
 REGPARM1 void evacuate1     (StgClosure **p);
 
 extern W_ thunk_selector_depth;

@@ -1507,7 +1507,7 @@ stg_takeMVarzh ( P_ mvar /* :: MVar a */ )
         StgTSO_block_info(CurrentTSO)  = mvar;
         StgTSO_why_blocked(CurrentTSO) = BlockedOnMVar::I16;
         StgMVar_tail(mvar)             = q;
-
+        foreign "C" pinpointSegfaultCap(MyCapability() "ptr");
         jump stg_block_takemvar(mvar);
     }
 

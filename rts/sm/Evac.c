@@ -25,6 +25,7 @@
 #include "Prelude.h"
 #include "Trace.h"
 #include "LdvProfile.h"
+#include "WSDeque.h"
 
 #if defined(PROF_SPIN) && defined(THREADED_RTS) && defined(PARALLEL_GC)
 StgWord64 whitehole_spin = 0;
@@ -32,7 +33,7 @@ StgWord64 whitehole_spin = 0;
 
 #if defined(THREADED_RTS) && !defined(PARALLEL_GC)
 #define evacuate(p) evacuate1(p)
-#define evacuate_rc(p,rc,m,mt,ms,gt) evacuate_rc1(p,rc,m,mt,ms,gt)
+#define evacuate_rc(p,rc) evacuate_rc1(p,rc)
 #define HEAP_ALLOCED_GC(p) HEAP_ALLOCED(p)
 #endif
 
@@ -45,7 +46,7 @@ StgWord64 whitehole_spin = 0;
  */
 #define MAX_THUNK_SELECTOR_DEPTH 16
 
-static void eval_thunk_selector (StgClosure **q, StgSelector * p, rtsBool, ResourceContainer *rc, mark_stack_bd, bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt);
+static void eval_thunk_selector (StgClosure **q, StgSelector * p, rtsBool, ResourceContainer *rc);
 STATIC_INLINE void evacuate_large(StgPtr p, gc_thread *gt);
 
 /* -----------------------------------------------------------------------------
@@ -93,10 +94,64 @@ alloc_for_copy (nat size, nat gen_no, gc_thread *gt)
    The evacuate() code
    -------------------------------------------------------------------------- */
 
+static void
+copy_rc(StgClosure **p, const StgInfoTable *info,
+    StgClosure *src, nat size, StgWord tag, ResourceContainer *rc)
+{
+    StgPtr to, from, lim;
+    nat i;
+
+    bdescr *bdescr_to = rc->currentCopy;
+
+    lim = bdescr_to->start + BLOCK_SIZE_W;
+
+    if (size + bdescr_to->free > lim) {
+        // We need to grab the next block in the to-space to copy into
+        if (bdescr_to->link == NULL) {
+            barf("GC ran out of space!");
+        }
+
+        debugTrace(DEBUG_gc, "New block to scavenge!");
+        pushWSDeque(rc->scavd_list, bdescr_to);
+
+        bdescr *next = bdescr_to->link;
+
+        // set the block and reset its starting point
+        bdescr_to = next;
+        bdescr_to->free = bdescr_to->start;
+        bdescr_to->flags |= BF_EVACUATED;
+        rc->currentCopy = bdescr_to;
+        rc->currentCopy->u.scan = rc->currentCopy->start;
+    }
+
+    // Now we have our destination block and the point to copy to
+    // Lets actually do the copy
+    from = (StgPtr)src;
+    to = bdescr_to->free;
+
+    to[0] = (W_)info;
+    for (i = 1; i < size; i++) { // unroll for small i
+    to[i] = from[i];
+    }
+
+    bdescr_to->free += size;
+
+    // Now everthing is copied
+    // Update the from space with a forwarding ptr
+    src->header.info = (const StgInfoTable *)MK_FORWARDING_PTR(to);
+    if(tag != NULL) {
+      *p = TAG_CLOSURE(tag,(StgClosure*)to);
+    } else {
+      *p = (StgClosure*)to;
+    }
+}
+
 STATIC_INLINE GNUC_ATTR_HOT void
 copy_tag(StgClosure **p, const StgInfoTable *info,
          StgClosure *src, nat size, nat gen_no, StgWord tag, gc_thread *gt)
 {
+    copy_rc(p,info,src,size,tag,gt->rc);
+/*
     StgPtr to, from;
     nat i;
 
@@ -146,6 +201,7 @@ copy_tag(StgClosure **p, const StgInfoTable *info,
     // the object again, so we cannot use copy_tag_nolock when PROFILING.
     SET_EVACUAEE_FOR_LDV(from, size);
 #endif
+*/
 }
 
 #if defined(PARALLEL_GC) && !defined(PROFILING)
@@ -153,6 +209,8 @@ STATIC_INLINE void
 copy_tag_nolock(StgClosure **p, const StgInfoTable *info,
          StgClosure *src, nat size, nat gen_no, StgWord tag, gc_thread *gt)
 {
+    copy_rc(p,info,src,size,tag,gt->rc);
+    /*
     StgPtr to, from;
     nat i;
 
@@ -179,6 +237,7 @@ copy_tag_nolock(StgClosure **p, const StgInfoTable *info,
     // the profiler can guess the position of the next object later.
     SET_EVACUAEE_FOR_LDV(from, size);
 #endif
+*/
 }
 #endif
 
@@ -190,35 +249,43 @@ static rtsBool
 copyPart(StgClosure **p, StgClosure *src, nat size_to_reserve,
          nat size_to_copy, nat gen_no, gc_thread *gt)
 {
-    StgPtr to, from;
+
+    StgPtr to, from, lim;
     nat i;
     StgWord info;
 
-#if defined(PARALLEL_GC)
-spin:
-        info = xchg((StgPtr)&src->header.info, (W_)&stg_WHITEHOLE_info);
-        if (info == (W_)&stg_WHITEHOLE_info) {
-#ifdef PROF_SPIN
-            whitehole_spin++;
-#endif
-            goto spin;
-        }
-    if (IS_FORWARDING_PTR(info)) {
-        src->header.info = (const StgInfoTable *)info;
-        evacuate(p); // does the failed_to_evac stuff
-        return rtsFalse;
-    }
-#else
-    info = (W_)src->header.info;
-#endif
+    bdescr *bdescr_to = gt->rc->currentCopy;
 
-    to = alloc_for_copy(size_to_reserve, gen_no, gt);
+    info = (W_)src->header.info;
+
+    //to = alloc_for_copy(size_to_reserve, gen_no, gt);
+
+    lim = bdescr_to->start + BLOCK_SIZE_W;
+
+    if (size_to_reserve + bdescr_to->free > lim) {
+        if (bdescr_to->link == NULL) {
+            barf("GC RAN OUT OF SPACE");
+        }
+        debugTrace(DEBUG_gc, "New block to scavenge!");
+        pushWSDeque(gt->rc->scavd_list, bdescr_to);
+
+        bdescr *next = bdescr_to->link;
+
+        // set the block and reset its starting point
+        bdescr_to = next;
+        bdescr_to->free = bdescr_to->start;
+        gt->rc->currentCopy = bdescr_to;
+        gt->rc->currentCopy->u.scan = gt->rc->currentCopy->start;
+    }
 
     from = (StgPtr)src;
+    to = bdescr_to->free;
     to[0] = info;
     for (i = 1; i < size_to_copy; i++) { // unroll for small i
         to[i] = from[i];
     }
+
+    bdescr_to->free += size_to_reserve;
 
     write_barrier();
     src->header.info = (const StgInfoTable*)MK_FORWARDING_PTR(to);
@@ -238,7 +305,7 @@ spin:
 
 
 /* Copy wrappers that don't tag the closure after copying */
-STATIC_INLINE GNUC_ATTR_HOT void
+static void
 copy(StgClosure **p, const StgInfoTable *info,
      StgClosure *src, nat size, nat gen_no, gc_thread *gt)
 {   
@@ -409,7 +476,7 @@ evacuate(StgClosure **p)
 
 
 REGPARM1 GNUC_ATTR_HOT void
-evacuate_rc(StgClosure **p, ResourceContainer *rc, bdescr *mark_stack_bd, bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt)
+evacuate_rc(StgClosure **p, ResourceContainer *rc)
 {
   bdescr *bd = NULL;
   nat gen_no;
@@ -417,6 +484,7 @@ evacuate_rc(StgClosure **p, ResourceContainer *rc, bdescr *mark_stack_bd, bdescr
   const StgInfoTable *info;
   StgWord tag;
 
+  gc_thread *gt = rc->gc_thread;
   q = *p;
 
 loop:
@@ -472,6 +540,7 @@ loop:
 
   debugTrace(DEBUG_gc, "Evacing closure in RC `%p`. Expected RC `%p`",
                 bd->rc, rc);
+  debugTrace(DEBUG_gc, "Closure is located at %p (%p) - block=%p", p, q, bd);
 
   if ((bd->flags & (BF_LARGE | BF_MARKED | BF_EVACUATED)) != 0) {
 
@@ -502,10 +571,10 @@ loop:
       /* If the object is in a gen that we're compacting, then we
        * need to use an alternative evacuate procedure.
        */
-      if (!is_marked((P_)q,bd)) {
-          mark((P_)q,bd);
-          push_mark_stack((P_)q, mark_stack_bd, mark_stack_top_bd, mark_sp);
-      }
+      //if (!is_marked((P_)q,bd)) {
+          //mark((P_)q,bd);
+          //push_mark_stack((P_)q);
+      //}
       return;
   }
 
@@ -663,7 +732,7 @@ loop:
       return;
 
   case THUNK_SELECTOR:
-      eval_thunk_selector(p, (StgSelector *)q, rtsTrue, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+      eval_thunk_selector(p, (StgSelector *)q, rtsTrue, rc);
       return;
 
   case IND:
@@ -723,29 +792,30 @@ loop:
       return;
 
   case STACK:
+  {
+    StgStack *stack = (StgStack *)q;
+
+    /* To evacuate a small STACK, we need to adjust the stack pointer
+     */
     {
-      StgStack *stack = (StgStack *)q;
+        StgStack *new_stack;
+        StgPtr r, s;
+        rtsBool mine;
 
-      /* To evacuate a small STACK, we need to adjust the stack pointer
-       */
-      {
-          StgStack *new_stack;
-          StgPtr r, s;
-          rtsBool mine;
-
-          mine = copyPart(p,(StgClosure *)stack, stack_sizeW(stack),
-                          sizeofW(StgStack), gen_no, gt);
-          if (mine) {
-              new_stack = (StgStack *)*p;
-              move_STACK(stack, new_stack);
-              for (r = stack->sp, s = new_stack->sp;
-                   r < stack->stack + stack->stack_size;) {
-                  *s++ = *r++;
-              }
-          }
-          return;
-      }
+        mine = rtsTrue;// copyPart(p,(StgClosure *)stack, stack_sizeW(stack),
+                        //sizeofW(StgStack), gen_no);
+        copy(p, info, q, stack_sizeW(stack), gen_no,gt);
+        if (mine) {
+            new_stack = (StgStack *)*p;
+            move_STACK(stack, new_stack);
+            for (r = stack->sp, s = new_stack->sp;
+                 r < stack->stack + stack->stack_size;) {
+                *s++ = *r++;
+            }
+        }
+        return;
     }
+  }
 
   case TREC_CHUNK:
       copy(p,info,q,sizeofW(StgTRecChunk),gen_no, gt);
@@ -822,7 +892,7 @@ unchain_thunk_selectors(StgSelector *p, StgClosure *val)
 }
 
 static void
-eval_thunk_selector (StgClosure **q, StgSelector * p, rtsBool evac, ResourceContainer *rc, mark_stack_bd, bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt)
+eval_thunk_selector (StgClosure **q, StgSelector * p, rtsBool evac, ResourceContainer *rc)
                  // NB. for legacy reasons, p & q are swapped around :(
 {
     nat field;
@@ -852,8 +922,8 @@ selector_chain:
             unchain_thunk_selectors(prev_thunk_selector, (StgClosure *)p);
             *q = (StgClosure *)p;
             // shortcut, behave as for:  if (evac) evacuate(q);
-            if (evac && bd->gen_no < gt->evac_gen_no) {
-                gt->failed_to_evac = rtsTrue;
+            if (evac && bd->gen_no < rc->gc_thread->evac_gen_no) {
+                rc->gc_thread->failed_to_evac = rtsTrue;
                 TICK_GC_FAILED_PROMOTION();
             }
             return;
@@ -1008,7 +1078,7 @@ selector_loop:
               // evacuate() cannot recurse through
               // eval_thunk_selector(), because we know val is not
               // a THUNK_SELECTOR.
-              if (evac) evacuate_rc(q, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
+              if (evac) evacuate_rc(q, rc);
               return;
           }
 
@@ -1052,16 +1122,16 @@ selector_loop:
 
           // recursively evaluate this selector.  We don't want to
           // recurse indefinitely, so we impose a depth bound.
-          if (gt->thunk_selector_depth >= MAX_THUNK_SELECTOR_DEPTH) {
+          if (rc->gc_thread->thunk_selector_depth >= MAX_THUNK_SELECTOR_DEPTH) {
               goto bale_out;
           }
 
-          gt->thunk_selector_depth++;
+          rc->gc_thread->thunk_selector_depth++;
           // rtsFalse says "don't evacuate the result".  It will,
           // however, update any THUNK_SELECTORs that are evaluated
           // along the way.
-          eval_thunk_selector(&val, (StgSelector*)selectee, rtsFalse, rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
-          gt->thunk_selector_depth--;
+          eval_thunk_selector(&val, (StgSelector*)selectee, rtsFalse, rc);
+          rc->gc_thread->thunk_selector_depth--;
 
           // did we actually manage to evaluate it?
           if (val == selectee) goto bale_out;
@@ -1097,7 +1167,7 @@ bale_out:
     // check whether it was updated in the meantime.
     *q = (StgClosure *)p;
     if (evac) {
-        copy(q,(const StgInfoTable *)info_ptr,(StgClosure *)p,THUNK_SELECTOR_sizeW(),bd->dest_no, gt);
+        copy(q,(const StgInfoTable *)info_ptr,(StgClosure *)p,THUNK_SELECTOR_sizeW(),bd->dest_no, rc);
     }
     unchain_thunk_selectors(prev_thunk_selector, *q);
     return;

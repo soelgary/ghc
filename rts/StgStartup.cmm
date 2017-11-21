@@ -110,7 +110,6 @@ stg_returnToSched /* no args: explicit stack layout */
   W_ r1;
   r1 = R1; // foreign calls may clobber R1
   SAVE_THREAD_STATE();
-  foreign "C" threadPaused(MyCapability() "ptr", CurrentTSO);
   R1 = r1;
   jump StgReturn [R1];
 }

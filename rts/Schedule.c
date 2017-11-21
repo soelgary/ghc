@@ -27,6 +27,7 @@
 #include "ProfHeap.h"
 #include "Weak.h"
 #include "sm/GC.h" // waitForGcThreads, releaseGCThreads, N
+#include "sm/RCGC.h"
 #include "sm/GCThread.h"
 #include "Sparks.h"
 #include "Capability.h"
@@ -961,7 +962,7 @@ scheduleDetectDeadlock (Capability **pcap, Task *task)
             debugTrace(DEBUG_sched,
                        "still deadlocked, waiting for signals...");
 
-            //awaitUserSignals();
+            awaitUserSignals();
 
             if (signals_pending()) {
                 startSignalHandlers(cap);
@@ -1833,9 +1834,10 @@ delete_threads_and_gc:
     // reset pending_sync *before* GC, so that when the GC threads
     // emerge they don't immediately re-enter the GC.
     pending_sync = 0;
-    GarbageCollect(collect_gen, heap_census, gc_type, rc);
+    //GarbageCollect(collect_gen, heap_census, gc_type, rc);
 #else
-    GarbageCollect(2, heap_census, 0, rc);
+    //GarbageCollect(2, heap_census, 0, rc);
+    GarbageCollect_rc(rc);
 #endif
 
     traceSparkCounters(cap);
@@ -1938,6 +1940,7 @@ delete_threads_and_gc:
     rc->currentAlloc = rc->nursery->blocks;
     cap->r.rCurrentAlloc = rc->currentAlloc;
     cap->r.rCurrentNursery = rc->nursery->blocks;
+    cap->r.rCurrentTSO = rc->ownerTSO;
     return;
 }
 
@@ -2276,12 +2279,7 @@ deleteAllThreads ( Capability *cap )
 
     for(rc = RC_MAIN; rc != NULL; rc = rc->link) {
         debugTrace(DEBUG_sched,"deleting all threads for rc %p", rc);
-        for (g = 0; g < RtsFlags.GcFlags.generations; g++) {
-            for (t = rc->generations[g]->threads; t != END_TSO_QUEUE; t = next) {
-                    next = t->global_link;
-                    deleteThread(cap,t);
-            }
-        }
+        deleteThread(cap,rc->ownerTSO);
     }
 
     // The run queue now contains a bunch of ThreadKilled threads.  We
