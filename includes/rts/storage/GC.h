@@ -131,6 +131,8 @@ typedef struct ResourceContainer_ {
                   // receive resources, but it wont be freed from memory. It
                   // will continue
 
+  int remaining_ticks;          /* remaining time left */
+  int tick_budget;              /* max ticks */
 
   memcount max_blocks;
   memcount used_blocks;
@@ -174,7 +176,7 @@ typedef struct ResourceContainer_ {
 
   // Sparks are a part of RCs now!
   SparkPool *sparks;
-  
+
   // Stats on spark creation/conversion
   SparkCounters spark_stats;
 

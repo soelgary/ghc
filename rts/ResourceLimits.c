@@ -67,7 +67,7 @@ bdescr *
 allocBlocksFor(ResourceContainer *rc, W_ n)
 {
   bdescr *curr, *prev, *bd;
-  
+
   bd = allocGroup(1);
   prev = bd;
   W_ count;
@@ -76,7 +76,7 @@ allocBlocksFor(ResourceContainer *rc, W_ n)
     dbl_link_onto(curr, &prev);
     prev = curr;
   }
-  
+
   for (curr = prev; curr != NULL; curr = curr->link) {
     curr->rc = rc;
     debugTrace(DEBUG_sched, "Set rc (%p) for bdescr (%p)", curr, rc);
@@ -178,7 +178,7 @@ initGCThread(ResourceContainer *rc)
   gct->eager_promotion = rtsTrue;
   gct->thunk_selector_depth = 0;
   gct->rc = rc;
-  
+
   gct->copied = 0;
   gct->scanned = 0;
   gct->any_work = 0;
@@ -191,7 +191,7 @@ initGCThread(ResourceContainer *rc)
     ws = &gct->gens[g];
     ws->gen = rc->generations[g];
     ws->my_gct = gct;
-    
+
     bdescr *bd = allocBlockFor(rc);
     debugTrace(DEBUG_gc, "RC got block for GC workspace %p", bd);
     bd->flags = BF_EVACUATED;
@@ -246,6 +246,7 @@ newRC(ResourceContainer *parent)
   rc->pinned_object_block = NULL;
 
   memcount max_blocks;
+  int tick_budget;
 
   if (parent != NULL) {
     if (parent->max_blocks - parent->used_blocks > unreclaimable_count + min_reclaimable_count) {
@@ -255,9 +256,21 @@ newRC(ResourceContainer *parent)
     } else {
       barf("Cannot create a resource container when the parent has %d free blocks", parent->max_blocks - parent->used_blocks);
     }
+
+    // TODO: what is the correct criteria
+    if (parent->tick_budget > 3) {
+        tick_budget = parent->tick_budget / 2;
+        parent->tick_budget = parent->tick_budget - tick_budget;
+    } else {
+        barf("Cannot create a resource container; parent does not have enough time budget");
+    }
   } else if (RtsFlags.GcFlags.maxHeapSize) {
     max_blocks = RtsFlags.GcFlags.maxHeapSize; // Divide by the size of a block
     debugTrace(DEBUG_gc, "Resource container does not have a parent. Setting number of blocks to be %d", max_blocks);
+
+    tick_budget = RtsFlags.ConcFlags.ctxtSwitchTicks;
+    debugTrace(DEBUG_gc, "Resource container does not have a parent. Setting time budget to be %d", tick_budget);
+
   } else {
       barf("Unknown heap size");
   }
@@ -293,6 +306,10 @@ newRC(ResourceContainer *parent)
   rc->pinned_object_blocks = NULL;
 
   rc->max_blocks = max_blocks;
+
+  rc->tick_budget = tick_budget;
+  /* we just started this thread so it has a full time alloc */
+  rc->remaining_ticks = tick_budget;
 
   rc->weak_ptr_list_hd = NULL;
   rc->weak_ptr_list_tl = NULL;
@@ -462,7 +479,7 @@ void
 markRC(evac_fn_rc evac, ResourceContainer *rc, rtsBool dontMarkSparks,
     bdescr *mark_stack_bd, bdescr *mark_stack_top_bd, StgPtr mark_sp, gc_thread *gt)
 {
-  // TODO RC: We need to mark the other roots. But first, figure out what 
+  // TODO RC: We need to mark the other roots. But first, figure out what
   // they are!
   InCall *incall;
 

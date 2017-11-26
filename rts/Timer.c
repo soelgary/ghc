@@ -42,19 +42,34 @@ void
 handle_tick(int unused STG_UNUSED)
 {
   handleProfTick();
-  if (RtsFlags.ConcFlags.ctxtSwitchTicks > 0) {
-      ticks_to_ctxt_switch--;
-      if (ticks_to_ctxt_switch <= 0) {
-          ticks_to_ctxt_switch = RtsFlags.ConcFlags.ctxtSwitchTicks;
-          contextSwitchAllCapabilities(); /* schedule a context switch */
-      }
+
+  int i;
+  for (i=0; i < n_capabilities; i++) {
+    // contextSwitchCapability(capabilities[i]);
+    ResourceContainer *rc = capabilities[i]->r.rCurrentTSO->rc;
+    rc->remaining_ticks--;
+    if (rc->remaining_ticks <= 0) {
+      contextSwitchCapability(capabilities[i]);
+    }
   }
 
+  /* if (RtsFlags.ConcFlags.ctxtSwitchTicks > 0) {
+   *
+   *     ticks_to_ctxt_switch--;
+   *     if (ticks_to_ctxt_switch <= 0) {
+   *         ticks_to_ctxt_switch = RtsFlags.ConcFlags.ctxtSwitchTicks;
+   *         contextSwitchAllCapabilities(); /\* schedule a context switch *\/
+   *     }
+   * } */
+
+  /* matt: IGNORE THIS */
+  /* PSA: ***DO NOT*** USE -I WILL BREAK GUARANTEES */
   /*
    * If we've been inactive for idleGCDelayTime (set by +RTS
    * -I), tell the scheduler to wake up and do a GC, to check
    * for threads that are deadlocked.
    */
+  /*
   switch (recent_activity) {
   case ACTIVITY_YES:
       recent_activity = ACTIVITY_MAYBE_NO;
@@ -92,6 +107,7 @@ handle_tick(int unused STG_UNUSED)
   default:
       break;
   }
+  */
 }
 
 // This global counter is used to allow multiple threads to stop the

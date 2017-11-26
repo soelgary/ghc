@@ -1834,6 +1834,7 @@ delete_threads_and_gc:
     // reset pending_sync *before* GC, so that when the GC threads
     // emerge they don't immediately re-enter the GC.
     pending_sync = 0;
+    // TODO WTF where is the GC
     //GarbageCollect(collect_gen, heap_census, gc_type, rc);
 #else
     //GarbageCollect(2, heap_census, 0, rc);
