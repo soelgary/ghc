@@ -1,0 +1,69 @@
+https://ghc.haskell.org/trac/ghc/wiki/Commentary/SourceTree/Includes
+
+## Data Structures
+
+
+Task: OS threads are represented by Task.
+- Tasks hold Capabilities
+- the Task can give up its Capability if:
+1. the next thread on the run queue cannot be executed by this Task. This can
+happen if: the next thread is bound to another task, or if it is unbound
+(therefore needs to be bound to a task) and the current task is bound.
+2. There is a Task waiting to return to Haskell from an FFI call
+3. (Single Threaded case) another Task is trying to GC. GC is stop the world.
+
+Capability: virtual machine for Haskell execution
+- running_task points to the current Task holding it. If null, this Capability
+is free
+- Each capability holds a pool of free Tasks
+
+The important components of a Capability are:
+
+The registers of the virtual machine, for executing Haskell code (although while
+actually executing, some of these registers may be held in real machine
+registers, they are only saved to the Capability when returning to the
+scheduler).
+The Task that is currently animating this Capability.
+A queue of runnable Haskell threads (the run queue).
+A list of Haskell threads currently making safe foreign calls.
+A list of worker OS threads.
+A list of Tasks waiting to return to Haskell from foreign calls.
+A list of Haskell threads waiting to wake up on this Capability.
+
+Run Queue:
+- each Capability has a Run Queue.
+- the Run Queue is a GC Root.
+
+
+Haskell threads are represented by a TSO (thread state object). TSOs are GC'ed
+- bound thread
+  A bound thread is created as the result of a call-in from outside Haskell;
+  that is, a call to foreign export or foreign import "wrapper". A bound thread
+  is tied to the OS thread that made the call; all further foreign calls made by
+  this Haskell thread are made in the same OS thread. (this is part of the
+  design of the FFI, described in the paper ​Extending the Haskell Foreign
+  Function Inteface with Concurrency).
+
+- unbound thread
+  An unbound thread is created by Control.Concurrent.forkIO. Foreign calls made
+  by an unbound thread are made by an arbitrary OS thread.
+
+- TSO created in createThread in rts/Thread.c. Called by createGenThread,
+  createIOThread and createStrictIOThread in rts/RtsAPI.c
+
+RC lives in the TSO.
+
+  cap->r.rCurrentTSO->rc
+
+
+----------------------
+
+TODO
+
+1. implement timer (kind of done)
+- if a thread enters the scheduler due to an error we need to reschedule it
+2. stuck threads
+3. single core forking
+4. forking across cores
+- rc needs a list of capabilities?
+5. kill/timeout/reclamation
