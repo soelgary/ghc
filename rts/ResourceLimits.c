@@ -79,7 +79,7 @@ allocBlocksFor(ResourceContainer *rc, W_ n)
   
   for (curr = prev; curr != NULL; curr = curr->link) {
     curr->rc = rc;
-    debugTrace(DEBUG_sched, "Set rc (%p) for bdescr (%p)", curr, rc);
+    //debugTrace(DEBUG_gc, "Set rc (%p) for bdescr (%p)", curr, rc);
   }
   return prev;
 }
@@ -120,8 +120,8 @@ initRCGeneration(ResourceContainer *rc, nat genNumber)
   rc->generations[genNumber]->failed_promotions = 0;
   rc->generations[genNumber]->max_blocks = 0;
   rc->generations[genNumber]->live_estimate = 0;
-  rc->generations[genNumber]->old_blocks = allocBlocksFor(rc, 100);
-  rc->generations[genNumber]->n_old_blocks = 100;
+  rc->generations[genNumber]->old_blocks = allocBlocksFor(rc, 30);
+  rc->generations[genNumber]->n_old_blocks = 30;
   rc->generations[genNumber]->scavenged_large_objects = NULL;
   rc->generations[genNumber]->n_scavenged_large_blocks = 0;
   rc->generations[genNumber]->mark = 0;
@@ -134,8 +134,8 @@ initRCGeneration(ResourceContainer *rc, nat genNumber)
   rc->generations[genNumber]->old_threads = END_TSO_QUEUE;
   rc->generations[genNumber]->weak_ptr_list = NULL;
   rc->generations[genNumber]->old_weak_ptr_list = NULL;
-  rc->generations[genNumber]->blocks = allocBlocksFor(rc, 100);;
-  rc->generations[genNumber]->n_blocks = 100;
+  rc->generations[genNumber]->blocks = allocBlocksFor(rc, 30);;
+  rc->generations[genNumber]->n_blocks = 30;
   rc->generations[genNumber]->n_words = 0;
   rc->generations[genNumber]->large_objects = NULL;
   rc->generations[genNumber]->n_large_blocks = 0;
@@ -283,7 +283,7 @@ newRC(ResourceContainer *parent)
   rc->isDead = rtsFalse;
 
   nurse->blocks = rc->generations[0]->blocks;
-  nurse->n_blocks = 100; //TODO: Decrement used blocks by n_blocks?
+  nurse->n_blocks = 10; //TODO: Decrement used blocks by n_blocks?
   nurse->rc = rc;
 
   rc->nursery = nurse;

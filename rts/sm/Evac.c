@@ -112,7 +112,7 @@ copy_rc(StgClosure **p, const StgInfoTable *info,
         }
 
         debugTrace(DEBUG_gc, "New block to scavenge!");
-        pushWSDeque(rc->scavd_list, bdescr_to);
+        pushWSDeque(rc->scavd_list, bdescr_to->link);
 
         bdescr *next = bdescr_to->link;
 
@@ -538,8 +538,9 @@ loop:
 
   bd = Bdescr((P_)q);
 
-  debugTrace(DEBUG_gc, "Evacing closure in RC `%p`. Expected RC `%p`",
-                bd->rc, rc);
+  if (bd->rc != rc) {
+    debugTrace(DEBUG_gc, "Evacing closure in RC `%p`. Expected RC `%p`", bd->rc, rc);
+  }
   debugTrace(DEBUG_gc, "Closure is located at %p (%p) - block=%p", p, q, bd);
 
   if ((bd->flags & (BF_LARGE | BF_MARKED | BF_EVACUATED)) != 0) {

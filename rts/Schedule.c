@@ -44,6 +44,8 @@
 #include "Messages.h"
 #include "Stable.h"
 
+#include "Snapshot.h"
+
 #ifdef HAVE_SYS_TYPES_H
 #include <sys/types.h>
 #endif
@@ -272,6 +274,10 @@ schedule (Capability *initialCapability, Task *task)
     }
 
     scheduleFindWork(&cap);
+    if (cap->n_run_queue == 0) {
+        debugTrace(DEBUG_sched, "WEll fuck. this shouldnt happen. were gonna deadlock");
+        //pushOnRunQueue(cap,RC_MAIN->ownerTSO);
+    }
 
     /* work pushing, currently relevant only for THREADED_RTS:
        (pushes threads, wakes up idle capabilities for stealing) */
@@ -634,6 +640,9 @@ scheduleFindWork (Capability **pcap)
 
     scheduleCheckBlockedThreads(*pcap);
 
+    Capability *cap = *pcap;
+    debugTrace(DEBUG_sched, "Should have work to do - %d", cap->n_run_queue);
+
 #if defined(THREADED_RTS)
     if (emptyRunQueue(*pcap)) { scheduleActivateSpark(*pcap); }
 #endif
@@ -962,6 +971,7 @@ scheduleDetectDeadlock (Capability **pcap, Task *task)
             debugTrace(DEBUG_sched,
                        "still deadlocked, waiting for signals...");
 
+            //takeSnapshot("/tmp/mvar.json");
             awaitUserSignals();
 
             if (signals_pending()) {

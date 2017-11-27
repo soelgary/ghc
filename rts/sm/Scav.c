@@ -411,8 +411,10 @@ scavenge_block (ResourceContainer *rc, bdescr *bd)
 {
   StgPtr p, q;
   StgInfoTable *info;
-  rtsBool saved_eager_promotion;
+  rtsBool saved_eager_promotion, forwardPtr;
   //gen_workspace *ws;
+
+  forwardPtr = rtsFalse;
 
   debugTrace(DEBUG_gc, "scavenging block %p (gen %d) @ %p",
              bd->start, bd->gen_no, bd->u.scan);
@@ -440,6 +442,7 @@ scavenge_block (ResourceContainer *rc, bdescr *bd)
     info = get_itbl((StgClosure *)p);
 
     if (IS_FORWARDING_PTR(info)) {
+        forwardPtr = rtsTrue;
         debugTrace(DEBUG_gc, "Well fuck. Cant scavenge a fucking forwarding ptr %p", p);
     }
 
@@ -459,7 +462,7 @@ scavenge_block (ResourceContainer *rc, bdescr *bd)
         rc->gc_thread->eager_promotion = saved_eager_promotion;
 
         if (rc->gc_thread->failed_to_evac) {
-            mvar->header.info = &stg_MVAR_DIRTY_info;
+            mvar->header.info = &stg_MVAR_CLEAN_info;
         } else {
             mvar->header.info = &stg_MVAR_CLEAN_info;
         }

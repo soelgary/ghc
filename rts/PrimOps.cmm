@@ -1507,9 +1507,10 @@ stg_takeMVarzh ( P_ mvar /* :: MVar a */ )
         StgTSO_block_info(CurrentTSO)  = mvar;
         StgTSO_why_blocked(CurrentTSO) = BlockedOnMVar::I16;
         StgMVar_tail(mvar)             = q;
-        foreign "C" pinpointSegfaultCap(MyCapability() "ptr");
+        //foreign "C" pinpointSegfaultCap(MyCapability() "ptr");
         jump stg_block_takemvar(mvar);
     }
+    //foreign "C" pinpointSegfaultCap(MyCapability() "ptr");
 
     /* we got the value... */
     val = StgMVar_value(mvar);
@@ -1631,7 +1632,7 @@ stg_putMVarzh ( P_ mvar, /* :: MVar a */
                 P_ val,  /* :: a */ )
 {
     W_ info, tso, q;
-
+    foreign "C" pinpointSegfaultCap(MyCapability() "ptr");
     LOCK_CLOSURE(mvar, info);
 
     if (StgMVar_value(mvar) != stg_END_TSO_QUEUE_closure) {
