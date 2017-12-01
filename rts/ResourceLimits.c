@@ -257,22 +257,22 @@ newRC(ResourceContainer *parent)
       barf("Cannot create a resource container when the parent has %d free blocks", parent->max_blocks - parent->used_blocks);
     }
 
-    // TODO: what is the correct criteria
+    // TODO: what is the correct criteria for this??
     if (parent->tick_budget > 3) {
         tick_budget = parent->tick_budget / 2;
         parent->tick_budget = parent->tick_budget - tick_budget;
     } else {
-        barf("Cannot create a resource container; parent does not have enough time budget");
+        barf("Cannot create a resource container; parent does not have enough time budget: %d", parent->tick_budget);
     }
-  } else if (RtsFlags.GcFlags.maxHeapSize) {
+  } else {// if (RtsFlags.GcFlags.maxHeapSize) {
     max_blocks = RtsFlags.GcFlags.maxHeapSize; // Divide by the size of a block
     debugTrace(DEBUG_gc, "Resource container does not have a parent. Setting number of blocks to be %d", max_blocks);
 
     tick_budget = RtsFlags.ConcFlags.ctxtSwitchTicks;
     debugTrace(DEBUG_gc, "Resource container does not have a parent. Setting time budget to be %d", tick_budget);
 
-  } else {
-      barf("Unknown heap size");
+  /* } else {
+   *     barf("Unknown heap size"); */
   }
 
   rc->generations = stgMallocBytes(numGenerations * sizeof(struct generation_ *), "createGenerations");

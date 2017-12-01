@@ -46,6 +46,7 @@ handle_tick(int unused STG_UNUSED)
   int i;
   for (i=0; i < n_capabilities; i++) {
     // contextSwitchCapability(capabilities[i]);
+      // TODO null check
     ResourceContainer *rc = capabilities[i]->r.rCurrentTSO->rc;
     rc->remaining_ticks--;
     if (rc->remaining_ticks <= 0) {

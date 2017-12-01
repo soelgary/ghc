@@ -274,7 +274,9 @@ WARNING_OPTS += -Waggregate-return
 WARNING_OPTS += -Wpointer-arith
 WARNING_OPTS += -Wmissing-noreturn
 WARNING_OPTS += -Wnested-externs
-WARNING_OPTS += -Wredundant-decls 
+WARNING_OPTS += -Wredundant-decls
+
+WARNING_OPTS += -Wno-unused
 
 # These ones are hard to avoid:
 #WARNING_OPTS += -Wconversion

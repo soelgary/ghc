@@ -186,9 +186,9 @@ GarbageCollect (nat collect_gen,
                 ResourceContainer *rc)
 {
     debugTrace(DEBUG_gc, "Starting GC");
-    
+
 //    memInventory(rtsTrue);
-    
+
     rtsBool rc_major_gc;
 
     nat g;
@@ -262,7 +262,7 @@ GarbageCollect (nat collect_gen,
     // exiting prematurely, so we can start them now.
     // NB. do this after the mutable lists have been saved above, otherwise
     // the other GC threads will be writing into the old mutable lists.
-    
+
     traceEventGcWork(rc);
 
     // mut lists can just be scavenged with no marking?
@@ -277,11 +277,11 @@ GarbageCollect (nat collect_gen,
 
     // Do not mark scheduler here! It just follows the queues. This will
     // leak information!
-    
-    // Do not mark signals! This is empty in a posix system anyway. Do we 
+
+    // Do not mark signals! This is empty in a posix system anyway. Do we
     // want to support windows?
 
-    // 
+    //
     markWeakPtrList(rc, mark_stack_bd, mark_stack_top_bd, mark_sp, gt);
     initWeakForGC(rc);
 
@@ -770,7 +770,8 @@ gcWorkerThread (Capability *cap)
     // Every thread evacuates some roots.
     gct->evac_gen_no = 0;
     markCapability(mark_root, gct, cap, rtsTrue/*prune sparks*/);
-    scavenge_capability_mut_lists(cap);
+    // TODO FIXME
+//    scavenge_capability_mut_lists(cap);
 
     // TODO RC -- fix mark stack here
     scavenge_until_all_done_rc(cap->r.rCurrentTSO->rc);
@@ -1003,7 +1004,7 @@ prepare_collected_gen_rc(ResourceContainer *rc, nat genNumber)
 
             debugTrace(DEBUG_gc, "bitmap_size: %d, bitmap: %p",
                        bitmap_size, bitmap);
-            
+
             // don't forget to fill it with zeros!
             memset(bitmap, 0, bitmap_size);
 
@@ -1058,7 +1059,7 @@ prepare_collected_gen (generation *gen)
     gen->threads = END_TSO_QUEUE;
 
     // deprecate the existing blocks
-    
+
     // TODO: Need to do this for RCs!
     /*
     gen->old_blocks   = gen->blocks;
@@ -1194,7 +1195,7 @@ prepare_uncollected_gen (generation *gen, ResourceContainer *rc)
    -------------------------------------------------------------------------- */
 static void
 collect_gct_blocks (void)
-{ 
+{
   barf("Use collect_gct_blocks_rc now");
 }
 
@@ -1524,7 +1525,7 @@ resize_nursery (ResourceContainer *rc, rtsBool rc_major_gc)
             StgWord needed;
 
             calcNeeded(rtsFalse, &needed, rc); // approx blocks needed at next GC
-            
+
             /* Guess how much will be live in generation 0 step 0 next time.
              * A good approximation is obtained by finding the
              * percentage of g0 that was live at the last minor GC.
@@ -1534,13 +1535,13 @@ resize_nursery (ResourceContainer *rc, rtsBool rc_major_gc)
              * a small adjustment for estimated slop at the end of a block
              * (- 10 words).
              */
-            
+
             if (rc_major_gc == 0)
             {
                 g0_pcnt_kept = ((copied / (BLOCK_SIZE_W - 10)) * 100)
                     / countNurseryBlocks();
             }
-            
+
             /* Estimate a size for the allocation area based on the
              * information available.  We might end up going slightly under
              * or over the suggested heap size, but we should be pretty
@@ -1553,7 +1554,7 @@ resize_nursery (ResourceContainer *rc, rtsBool rc_major_gc)
              * where 'needed' is the amount of memory needed at the next
              * collection for collecting all gens except g0.
              */
-            
+
             blocks =
                 (((long)RtsFlags.GcFlags.heapSizeSuggestion - (long)needed) * 100) /
                 (100 + (long)g0_pcnt_kept);

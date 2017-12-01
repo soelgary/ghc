@@ -10,7 +10,7 @@ void snapshot_srt (StgClosure **srt, nat srt_bitmap, void *link, FILE *fd, char 
 
 
 void
-printLine(FILE *fd, void *source, void *target, char *closure_type, char *source_closure, int last) 
+printLine(FILE *fd, void *source, void *target, char *closure_type, char *source_closure, int last)
 {
   fprintf(fd, "{\"source\": \"%p\", \"target\": \"%p\", \"source_closure_type\": \"%s\", \"target_closure_type\": \"%s\"}", source, target, source_closure, closure_type);
   if (!last) {
@@ -20,7 +20,7 @@ printLine(FILE *fd, void *source, void *target, char *closure_type, char *source
 }
 /*
 void
-printLine(FILE *fd, void *source, void *target, char *closure_type, char *source_closure, int last) 
+printLine(FILE *fd, void *source, void *target, char *closure_type, char *source_closure, int last)
 {
   if(source != NULL) {
     fprintf(fd, "p%p_%s -> p%p_%s\n", source, source_closure, target, closure_type);
@@ -70,6 +70,8 @@ snapshot_PAP_payload (StgClosure *fun, StgClosure **payload, StgWord size, FILE 
     StgPtr p;
     StgWord bitmap;
     StgFunInfoTable *fun_info;
+
+    void * link = NULL; // TODO wtf should link actually be
 
     fun_info = get_fun_itbl(UNTAG_CLOSURE(fun));
     ASSERT(fun_info->i.type != PAP);
@@ -614,7 +616,7 @@ takeSnapshotFrom(StgClosure **p, void *link, FILE *fd, char *source_closure)
       debugTrace(DEBUG_gc, "Found a BLOCKING_QUEUE");
       printLine(fd, link, q, ct, source_closure, 0);
       StgBlockingQueue *bq = (StgBlockingQueue *)p;
-      
+
       takeSnapshotFrom(&bq->bh, q, fd, ct);
       takeSnapshotFrom((StgClosure**)&bq->owner, q, fd, ct);
       takeSnapshotFrom((StgClosure**)&bq->queue, q, fd, ct);
@@ -636,7 +638,7 @@ takeSnapshotFrom(StgClosure **p, void *link, FILE *fd, char *source_closure)
       debugTrace(DEBUG_gc, "Found a AP_STACK");
       printLine(fd, link, q, ct, source_closure, 0);
       StgAP_STACK *ap = (StgAP_STACK *)p;
-      
+
       takeSnapshotFrom(&ap->fun, q, fd, ct);
       snapshot_stack((StgPtr)ap->payload, (StgPtr)ap->payload + ap->size, ap, fd, ct);
       break;
@@ -777,19 +779,19 @@ takeSnapshot(char *name)
   fd = fopen(name, "w+");
   fputs("[\n", fd);
   //fputs("digraph G {\n",fd);
-  
+
   //printLine(fd, 0x4200005410, 0x4200005412, "blackhole", 0);
   //printLine(fd, 0x4200005410, 0x4200005415, "blackhole", 0);
   //printLine(fd, 0x4200005411, 0x4200005415, "blackhole", 1);
-  
-  
+
+
   c = (StgClosure **)(void *)&rc->ownerTSO;
   takeSnapshotFrom(c, NULL, fd, NULL);
   printLine(fd, NULL, NULL, NULL, NULL, 1);
   fputs("]\n", fd);
   //fputs("}", fd);
   fclose(fd);
-  
+
 
   fd = fopen("/tmp/roots.txt", "w+");
   fputs("[\n", fd);
@@ -815,6 +817,5 @@ takeSnapshot(char *name)
   fputs("]\n", fd);
   //fputs("}", fd);
   fclose(fd);
-  
-}
 
+}

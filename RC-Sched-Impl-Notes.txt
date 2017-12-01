@@ -67,3 +67,13 @@ TODO
 4. forking across cores
 - rc needs a list of capabilities?
 5. kill/timeout/reclamation
+
+-----------------------------
+
+COMPILING
+
+inplace/bin/ghc-stage1 -rtsopts -debug -eventlog stress_examples/stress1.hs
+
+RUNNING
+
+run with: +RTS -M1200000000

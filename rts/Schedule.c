@@ -44,6 +44,8 @@
 #include "Messages.h"
 #include "Stable.h"
 
+#include "ResourceLimits.h"
+
 #ifdef HAVE_SYS_TYPES_H
 #include <sys/types.h>
 #endif
@@ -313,6 +315,7 @@ schedule (Capability *initialCapability, Task *task)
     //
     // Get a thread to run
     //
+    /* CReduceThis */
     t = popRunQueue(cap);
 
     rc = t->rc;
@@ -730,7 +733,7 @@ schedulePushWork(Capability *cap USED_IF_THREADS,
 
     // Figure out how many capabilities we want to wake up.  We need at least
     // sparkPoolSize(cap) plus the number of spare threads we have.
-    n_wanted_caps = sparkPoolSizeCap(cap) + spare_threads;
+    n_wanted_caps = sparkPoolSizeRC(cap->r.rCurrentTSO->rc) + spare_threads;
     if (n_wanted_caps == 0) return;
 
     // First grab as many free Capabilities as we can.
@@ -773,7 +776,7 @@ schedulePushWork(Capability *cap USED_IF_THREADS,
 
         debugTrace(DEBUG_sched,
                    "cap %d: %d threads, %d sparks, and %d free capabilities, sharing...",
-                   cap->no, cap->n_run_queue, sparkPoolSizeCap(cap),
+                   cap->no, cap->n_run_queue, sparkPoolSizeRC(cap->r.rCurrentTSO->rc),
                    n_free_caps);
 
         // There are n_free_caps+1 caps in total.  We will share the threads
@@ -849,7 +852,9 @@ schedulePushWork(Capability *cap USED_IF_THREADS,
         // release the capabilities
         for (i = 0; i < n_free_caps; i++) {
             task->cap = free_caps[i];
-            if (sparkPoolSizeCap(cap) > 0) {
+            // FIXME is this right?
+            // (originally it was sparkPoolSizeCap(cap)
+            if (sparkPoolSizeRC(cap->r.rCurrentTSO->rc) > 0) {
                 // If we have sparks to steal, wake up a worker on the
                 // capability, even if it has no threads to run.
                 releaseAndWakeupCapability(free_caps[i]);
@@ -1796,7 +1801,7 @@ delete_threads_and_gc:
             capabilities[i]->spark_stats.gcd +=
                 sparkPoolSize(capabilities[i]->sparks);
             // No race here since all Caps are stopped.
-            discardSparksCap(capabilities[i]);
+            discardSparksRC(capabilities[i]->r.rCurrentTSO->rc);
         }
 #endif
         sched_state = SCHED_SHUTTING_DOWN;
