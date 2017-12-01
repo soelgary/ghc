@@ -264,15 +264,15 @@ newRC(ResourceContainer *parent)
     } else {
         barf("Cannot create a resource container; parent does not have enough time budget: %d", parent->tick_budget);
     }
-  } else {// if (RtsFlags.GcFlags.maxHeapSize) {
+  } else if (RtsFlags.GcFlags.maxHeapSize) {
     max_blocks = RtsFlags.GcFlags.maxHeapSize; // Divide by the size of a block
     debugTrace(DEBUG_gc, "Resource container does not have a parent. Setting number of blocks to be %d", max_blocks);
 
     tick_budget = RtsFlags.ConcFlags.ctxtSwitchTicks;
     debugTrace(DEBUG_gc, "Resource container does not have a parent. Setting time budget to be %d", tick_budget);
 
-  /* } else {
-   *     barf("Unknown heap size"); */
+  } else {
+    barf("Unknown heap size");
   }
 
   rc->generations = stgMallocBytes(numGenerations * sizeof(struct generation_ *), "createGenerations");
