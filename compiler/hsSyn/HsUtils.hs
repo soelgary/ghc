@@ -20,7 +20,7 @@ which deal with the instantiated versions are located elsewhere:
 
 module HsUtils(
   -- Terms
-  mkHsPar, mkHsApp, mkHsAppType, mkHsAppTypeOut, mkHsCaseAlt,
+  mkHsPar, mkHsApp, mkHsAppType, mkHsAppTypes, mkHsAppTypeOut, mkHsCaseAlt,
   mkSimpleMatch, unguardedGRHSs, unguardedRHS,
   mkMatchGroup, mkMatch, mkPrefixFunRhs, mkHsLam, mkHsIf,
   mkHsWrap, mkLHsWrap, mkHsWrapCo, mkHsWrapCoR, mkLHsWrapCo,
@@ -72,7 +72,7 @@ module HsUtils(
   noRebindableInfo,
 
   -- Collecting binders
-  isUnliftedHsBind,
+  isUnliftedHsBind, isBangedHsBind,
 
   collectLocalBinders, collectHsValBinders, collectHsBindListBinders,
   collectHsIdBinders,
@@ -84,13 +84,14 @@ module HsUtils(
   hsLTyClDeclBinders, hsTyClForeignBinders,
   hsPatSynSelectors, getPatSynBinds,
   hsForeignDeclsBinders, hsGroupBinders, hsDataFamInstBinders,
-  hsDataDefnBinders,
 
   -- Collecting implicit binders
   lStmtsImplicits, hsValBindsImplicits, lPatImplicits
   ) where
 
 #include "HsVersions.h"
+
+import GhcPrelude
 
 import HsDecls
 import HsBinds
@@ -121,6 +122,7 @@ import Util
 import Bag
 import Outputable
 import Constants
+import TyCon
 
 import Data.Either
 import Data.Function
@@ -146,7 +148,8 @@ mkSimpleMatch :: HsMatchContext (NameOrRdrName (IdP id))
               -> LMatch id (Located (body id))
 mkSimpleMatch ctxt pats rhs
   = L loc $
-    Match ctxt pats Nothing (unguardedGRHSs rhs)
+    Match { m_ctxt = ctxt, m_pats = pats
+          , m_grhss = unguardedGRHSs rhs }
   where
     loc = case pats of
                 []      -> getLoc rhs
@@ -177,6 +180,9 @@ mkHsApp e1 e2 = addCLoc e1 e2 (HsApp e1 e2)
 mkHsAppType :: LHsExpr name -> LHsWcType name -> LHsExpr name
 mkHsAppType e t = addCLoc e (hswc_body t) (HsAppType e t)
 
+mkHsAppTypes :: LHsExpr name -> [LHsWcType name] -> LHsExpr name
+mkHsAppTypes = foldl mkHsAppType
+
 mkHsAppTypeOut :: LHsExpr GhcTc -> LHsWcType GhcRn -> LHsExpr GhcTc
 mkHsAppTypeOut e t = addCLoc e (hswc_body t) (HsAppTypeOut e t)
 
@@ -184,7 +190,8 @@ mkHsLam :: [LPat GhcPs] -> LHsExpr GhcPs -> LHsExpr GhcPs
 mkHsLam pats body = mkHsPar (L (getLoc body) (HsLam matches))
   where
     matches = mkMatchGroup Generated
-                           [mkSimpleMatch LambdaExpr pats body]
+                           [mkSimpleMatch LambdaExpr pats' body]
+    pats' = map parenthesizeCompoundPat pats
 
 mkHsLams :: [TyVar] -> [EvVar] -> LHsExpr GhcTc -> LHsExpr GhcTc
 mkHsLams tyvars dicts expr = mkLHsWrap (mkWpTyLams tyvars
@@ -424,10 +431,12 @@ nlInfixConPat :: IdP id -> LPat id -> LPat id -> LPat id
 nlInfixConPat con l r = noLoc (ConPatIn (noLoc con) (InfixCon l r))
 
 nlConPat :: RdrName -> [LPat GhcPs] -> LPat GhcPs
-nlConPat con pats = noLoc (ConPatIn (noLoc con) (PrefixCon pats))
+nlConPat con pats =
+  noLoc (ConPatIn (noLoc con) (PrefixCon (map parenthesizeCompoundPat pats)))
 
 nlConPatName :: Name -> [LPat GhcRn] -> LPat GhcRn
-nlConPatName con pats = noLoc (ConPatIn (noLoc con) (PrefixCon pats))
+nlConPatName con pats =
+  noLoc (ConPatIn (noLoc con) (PrefixCon (map parenthesizeCompoundPat pats)))
 
 nlNullaryConPat :: IdP id -> LPat id
 nlNullaryConPat con = noLoc (ConPatIn (noLoc con) (PrefixCon []))
@@ -476,10 +485,10 @@ nlHsTyVar :: IdP name                     -> LHsType name
 nlHsFunTy :: LHsType name -> LHsType name -> LHsType name
 nlHsParTy :: LHsType name                 -> LHsType name
 
-nlHsAppTy f t           = noLoc (HsAppTy f t)
-nlHsTyVar x             = noLoc (HsTyVar NotPromoted (noLoc x))
-nlHsFunTy a b           = noLoc (HsFunTy a b)
-nlHsParTy t             = noLoc (HsParTy t)
+nlHsAppTy f t = noLoc (HsAppTy f (parenthesizeCompoundHsType t))
+nlHsTyVar x   = noLoc (HsTyVar NotPromoted (noLoc x))
+nlHsFunTy a b = noLoc (HsFunTy a b)
+nlHsParTy t   = noLoc (HsParTy t)
 
 nlHsTyConApp :: IdP name -> [LHsType name] -> LHsType name
 nlHsTyConApp tycon tys  = foldl nlHsAppTy (nlHsTyVar tycon) tys
@@ -636,9 +645,15 @@ typeToLHsType ty
     go (AppTy t1 t2)        = nlHsAppTy (go t1) (go t2)
     go (LitTy (NumTyLit n)) = noLoc $ HsTyLit (HsNumTy noSourceText n)
     go (LitTy (StrTyLit s)) = noLoc $ HsTyLit (HsStrTy noSourceText s)
-    go (TyConApp tc args)   = nlHsTyConApp (getRdrName tc) (map go args')
+    go ty@(TyConApp tc args)
+      | any isInvisibleTyConBinder (tyConBinders tc)
+        -- We must produce an explicit kind signature here to make certain
+        -- programs kind-check. See Note [Kind signatures in typeToLHsType].
+      = noLoc $ HsKindSig lhs_ty (go (typeKind ty))
+      | otherwise = lhs_ty
        where
-         args' = filterOutInvisibleTypes tc args
+        lhs_ty = nlHsTyConApp (getRdrName tc) (map go args')
+        args'  = filterOutInvisibleTypes tc args
     go (CastTy ty _)        = go ty
     go (CoercionTy co)      = pprPanic "toLHsSigWcType" (ppr co)
 
@@ -649,6 +664,55 @@ typeToLHsType ty
     go_tv tv = noLoc $ KindedTyVar (noLoc (getRdrName tv))
                                    (go (tyVarKind tv))
 
+{-
+Note [Kind signatures in typeToLHsType]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+There are types that typeToLHsType can produce which require explicit kind
+signatures in order to kind-check. Here is an example from Trac #14579:
+
+  newtype Wat (x :: Proxy (a :: Type)) = MkWat (Maybe a) deriving Eq
+  newtype Glurp a = MkGlurp (Wat ('Proxy :: Proxy a)) deriving Eq
+
+The derived Eq instance for Glurp (without any kind signatures) would be:
+
+  instance Eq a => Eq (Glurp a) where
+    (==) = coerce @(Wat 'Proxy -> Wat 'Proxy -> Bool)
+                  @(Glurp a    -> Glurp a    -> Bool)
+                  (==)
+
+(Where the visible type applications use types produced by typeToLHsType.)
+
+The type 'Proxy has an underspecified kind, so we must ensure that
+typeToLHsType ascribes it with its kind: ('Proxy :: Proxy a).
+
+We must be careful not to produce too many kind signatures, or else
+typeToLHsType can produce noisy types like
+('Proxy :: Proxy (a :: (Type :: Type))). In pursuit of this goal, we adopt the
+following criterion for choosing when to annotate types with kinds:
+
+* If there is a tycon application with any invisible arguments, annotate
+  the tycon application with its kind.
+
+Why is this the right criterion? The problem we encountered earlier was the
+result of an invisible argument (the `a` in ('Proxy :: Proxy a)) being
+underspecified, so producing a kind signature for 'Proxy will catch this.
+If there are no invisible arguments, then there is nothing to do, so we can
+avoid polluting the result type with redundant noise.
+
+What about a more complicated tycon, such as this?
+
+  T :: forall {j} (a :: j). a -> Type
+
+Unlike in the previous 'Proxy example, annotating an application of `T` to an
+argument (e.g., annotating T ty to obtain (T ty :: Type)) will not fix
+its invisible argument `j`. But because we apply this strategy recursively,
+`j` will be fixed because the kind of `ty` will be fixed! That is to say,
+something to the effect of (T (ty :: j) :: Type) will be produced.
+
+This strategy certainly isn't foolproof, as tycons that contain type families
+in their kind might break down. But we'd likely need visible kind application
+to make those work.
+-}
 
 {- *********************************************************************
 *                                                                      *
@@ -756,16 +820,19 @@ mk_easy_FunBind loc fun pats expr
               [mkMatch (mkPrefixFunRhs (L loc fun)) pats expr
                        (noLoc emptyLocalBinds)]
 
--- | Make a prefix 'FunRhs' 'HsMatchContext'
+-- | Make a prefix, non-strict function 'HsMatchContext'
 mkPrefixFunRhs :: Located id -> HsMatchContext id
-mkPrefixFunRhs n = FunRhs n Prefix
+mkPrefixFunRhs n = FunRhs { mc_fun = n
+                          , mc_fixity = Prefix
+                          , mc_strictness = NoSrcStrict }
 
 ------------
 mkMatch :: HsMatchContext (NameOrRdrName (IdP p)) -> [LPat p] -> LHsExpr p
         -> Located (HsLocalBinds p) -> LMatch p (LHsExpr p)
 mkMatch ctxt pats expr lbinds
-  = noLoc (Match ctxt (map paren pats) Nothing
-                 (GRHSs (unguardedRHS noSrcSpan expr) lbinds))
+  = noLoc (Match { m_ctxt  = ctxt
+                 , m_pats  = map paren pats
+                 , m_grhss = GRHSs (unguardedRHS noSrcSpan expr) lbinds })
   where
     paren lp@(L l p) | hsPatNeedsParens p = L l (ParPat lp)
                      | otherwise          = lp
@@ -794,49 +861,31 @@ to return a [Name] or [Id].  Before renaming the record punning
 and wild-card mechanism makes it hard to know what is bound.
 So these functions should not be applied to (HsSyn RdrName)
 
-Note [Unlifted id check in isHsUnliftedBind]
+Note [Unlifted id check in isUnliftedHsBind]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Suppose there is a binding with the type (Num a => (# a, a #)). Is this a
-strict binding that should be disallowed at the top level? At first glance,
-no, because it's a function. But consider how this is desugared via
-AbsBinds:
+The function isUnliftedHsBind is used to complain if we make a top-level
+binding for a variable of unlifted type.
 
-  -- x :: Num a => (# a, a #)
-  x = (# 3, 4 #)
+Such a binding is illegal if the top-level binding would be unlifted;
+but also if the local letrec generated by desugaring AbsBinds would be.
+E.g.
+      f :: Num a => (# a, a #)
+      g :: Num a => a -> a
+      f = ...g...
+      g = ...g...
 
-becomes
+The top-level bindings for f,g are not unlifted (because of the Num a =>),
+but the local, recursive, monomorphic bindings are:
 
-  x = \ $dictNum ->
-      let x_mono = (# fromInteger $dictNum 3, fromInteger $dictNum 4 #) in
-      x_mono
+      t = /\a \(d:Num a).
+         letrec fm :: (# a, a #) = ...g...
+                gm :: a -> a = ...f...
+         in (fm, gm)
 
-Note that the inner let is strict. And thus if we have a bunch of mutually
-recursive bindings of this form, we could end up in trouble. This was shown
-up in #9140.
+Here the binding for 'fm' is illegal.  So generally we check the abe_mono types.
 
-But if there is a type signature on x, everything changes because of the
-desugaring used by AbsBindsSig:
-
-  x :: Num a => (# a, a #)
-  x = (# 3, 4 #)
-
-becomes
-
-  x = \ $dictNum -> (# fromInteger $dictNum 3, fromInteger $dictNum 4 #)
-
-No strictness anymore! The bottom line here is that, for inferred types, we
-care about the strictness of the type after the =>. For checked types
-(AbsBindsSig), we care about the overall strictness.
-
-This matters. If we don't separate out the AbsBindsSig case, then GHC runs into
-a problem when compiling
-
-  undefined :: forall (r :: RuntimeRep) (a :: TYPE r). HasCallStack => a
-
-Looking only after the =>, we cannot tell if this is strict or not. (GHC panics
-if you try.) Looking at the whole type, on the other hand, tells you that this
-is a lifted function type, with no trouble at all.
-
+BUT we have a special case when abs_sig is true;
+  see HsBinds Note [The abs_sig field of AbsBinds]
 -}
 
 ----------------- Bindings --------------------------
@@ -846,18 +895,32 @@ is a lifted function type, with no trouble at all.
 -- AbsBinds. See Note [Unlifted id check in isUnliftedHsBind]. For usage
 -- information, see Note [Strict binds check] is DsBinds.
 isUnliftedHsBind :: HsBind GhcTc -> Bool  -- works only over typechecked binds
-isUnliftedHsBind (AbsBindsSig { abs_sig_export = id })
-  = isUnliftedType (idType id)
 isUnliftedHsBind bind
+  | AbsBinds { abs_exports = exports, abs_sig = has_sig } <- bind
+  = if has_sig
+    then any (is_unlifted_id . abe_poly) exports
+    else any (is_unlifted_id . abe_mono) exports
+    -- If has_sig is True we wil never generate a binding for abe_mono,
+    -- so we don't need to worry about it being unlifted. The abe_poly
+    -- binding might not be: e.g. forall a. Num a => (# a, a #)
+
+  | otherwise
   = any is_unlifted_id (collectHsBindBinders bind)
   where
-    is_unlifted_id id
-      = case tcSplitSigmaTy (idType id) of
-          (_, _, tau) -> isUnliftedType tau
-          -- For the is_unlifted check, we need to look inside polymorphism
-          -- and overloading.  E.g.  x = (# 1, True #)
-          -- would get type forall a. Num a => (# a, Bool #)
-          -- and we want to reject that.  See Trac #9140
+    is_unlifted_id id = isUnliftedType (idType id)
+
+-- | Is a binding a strict variable or pattern bind (e.g. @!x = ...@)?
+isBangedHsBind :: HsBind GhcTc -> Bool
+isBangedHsBind (AbsBinds { abs_binds = binds })
+  = anyBag (isBangedHsBind . unLoc) binds
+isBangedHsBind (FunBind {fun_matches = matches})
+  | [L _ match] <- unLoc $ mg_alts matches
+  , FunRhs{mc_strictness = SrcStrict} <- m_ctxt match
+  = True
+isBangedHsBind (PatBind {pat_lhs = pat})
+  = isBangedLPat pat
+isBangedHsBind _
+  = False
 
 collectLocalBinders :: HsLocalBindsLR idL idR -> [IdP idL]
 collectLocalBinders (HsValBinds binds) = collectHsIdBinders binds
@@ -900,7 +963,6 @@ collect_bind _ (AbsBinds { abs_exports = dbinds }) acc = map abe_poly dbinds ++ 
         -- I don't think we want the binders from the abe_binds
         -- The only time we collect binders from a typechecked
         -- binding (hence see AbsBinds) is in zonking in TcHsSyn
-collect_bind _ (AbsBindsSig { abs_sig_export = poly }) acc = poly : acc
 collect_bind omitPatSyn (PatSynBind (PSB { psb_id = L _ ps })) acc
   | omitPatSyn                  = acc
   | otherwise                   = ps : acc
@@ -1067,7 +1129,7 @@ hsPatSynSelectors (ValBindsOut binds _)
 
 addPatSynSelector:: LHsBind p -> [IdP p] -> [IdP p]
 addPatSynSelector bind sels
-  | L _ (PatSynBind (PSB { psb_args = RecordPatSyn as })) <- bind
+  | L _ (PatSynBind (PSB { psb_args = RecCon as })) <- bind
   = map (unLoc . recordPatSynSelectorId) as ++ sels
   | otherwise = sels
 
@@ -1089,7 +1151,8 @@ hsLInstDeclBinders (L _ (TyFamInstD {})) = mempty
 -- the SrcLoc returned are for the whole declarations, not just the names
 hsDataFamInstBinders :: DataFamInstDecl pass
                      -> ([Located (IdP pass)], [LFieldOcc pass])
-hsDataFamInstBinders (DataFamInstDecl { dfid_defn = defn })
+hsDataFamInstBinders (DataFamInstDecl { dfid_eqn = HsIB { hsib_body =
+                       FamEqn { feqn_rhs = defn }}})
   = hsDataDefnBinders defn
   -- There can't be repeated symbols because only data instances have binders
 
@@ -1101,55 +1164,48 @@ hsDataDefnBinders (HsDataDefn { dd_cons = cons })
   -- See Note [Binders in family instances]
 
 -------------------
+type Seen pass = [LFieldOcc pass] -> [LFieldOcc pass]
+                 -- Filters out ones that have already been seen
+
 hsConDeclsBinders :: [LConDecl pass] -> ([Located (IdP pass)], [LFieldOcc pass])
-  -- See hsLTyClDeclBinders for what this does
-  -- The function is boringly complicated because of the records
-  -- And since we only have equality, we have to be a little careful
-hsConDeclsBinders cons = go id cons
-  where go :: ([LFieldOcc pass] -> [LFieldOcc pass])
-           -> [LConDecl pass] -> ([Located (IdP pass)], [LFieldOcc pass])
-        go _ [] = ([], [])
-        go remSeen (r:rs) =
-          -- don't re-mangle the location of field names, because we don't
-          -- have a record of the full location of the field declaration anyway
-          case r of
-             -- remove only the first occurrence of any seen field in order to
-             -- avoid circumventing detection of duplicate fields (#9156)
-             L loc (ConDeclGADT { con_names = names
-                                , con_type = HsIB { hsib_body = res_ty}}) ->
-               case tau of
-                 L _ (HsFunTy
-                      (L _ (HsAppsTy
-                            [L _ (HsAppPrefix (L _ (HsRecTy flds)))])) _res_ty)
-                         -> record_gadt flds
-                 L _ (HsFunTy (L _ (HsRecTy flds)) _res_ty)
-                         -> record_gadt flds
+   -- See hsLTyClDeclBinders for what this does
+   -- The function is boringly complicated because of the records
+   -- And since we only have equality, we have to be a little careful
+hsConDeclsBinders cons
+  = go id cons
+  where
+    go :: Seen pass -> [LConDecl pass]
+       -> ([Located (IdP pass)], [LFieldOcc pass])
+    go _ [] = ([], [])
+    go remSeen (r:rs)
+      -- Don't re-mangle the location of field names, because we don't
+      -- have a record of the full location of the field declaration anyway
+      = case r of
+           -- remove only the first occurrence of any seen field in order to
+           -- avoid circumventing detection of duplicate fields (#9156)
+           L loc (ConDeclGADT { con_names = names, con_args = args })
+             -> (map (L loc . unLoc) names ++ ns, flds ++ fs)
+             where
+                (remSeen', flds) = get_flds remSeen args
+                (ns, fs) = go remSeen' rs
 
-                 _other  -> (map (L loc . unLoc) names ++ ns, fs)
-                            where (ns, fs) = go remSeen rs
-               where
-                 (_tvs, _cxt, tau) = splitLHsSigmaTy res_ty
-                 record_gadt flds = (map (L loc . unLoc) names ++ ns, r' ++ fs)
-                   where r' = remSeen (concatMap (cd_fld_names . unLoc) flds)
-                         remSeen' = foldr (.) remSeen
-                                        [deleteBy ((==) `on`
-                                              unLoc . rdrNameFieldOcc . unLoc) v
-                                        | v <- r']
-                         (ns, fs) = go remSeen' rs
+           L loc (ConDeclH98 { con_name = name, con_args = args })
+             -> ([L loc (unLoc name)] ++ ns, flds ++ fs)
+             where
+                (remSeen', flds) = get_flds remSeen args
+                (ns, fs) = go remSeen' rs
 
-             L loc (ConDeclH98 { con_name = name
-                               , con_details = RecCon flds }) ->
-               ([L loc (unLoc name)] ++ ns, r' ++ fs)
-                  where r' = remSeen (concatMap (cd_fld_names . unLoc)
-                                                (unLoc flds))
-                        remSeen'
-                          = foldr (.) remSeen
-                               [deleteBy ((==) `on`
-                                   unLoc . rdrNameFieldOcc . unLoc) v | v <- r']
-                        (ns, fs) = go remSeen' rs
-             L loc (ConDeclH98 { con_name = name }) ->
-                ([L loc (unLoc name)] ++ ns, fs)
-                  where (ns, fs) = go remSeen rs
+    get_flds :: Seen pass -> HsConDeclDetails pass
+             -> (Seen pass, [LFieldOcc pass])
+    get_flds remSeen (RecCon flds)
+       = (remSeen', fld_names)
+       where
+          fld_names = remSeen (concatMap (cd_fld_names . unLoc) (unLoc flds))
+          remSeen' = foldr (.) remSeen
+                               [deleteBy ((==) `on` unLoc . rdrNameFieldOcc . unLoc) v
+                               | v <- fld_names]
+    get_flds remSeen _
+       = (remSeen, [])
 
 {-
 
@@ -1192,7 +1248,7 @@ lStmtsImplicits = hs_lstmts
     hs_stmt :: StmtLR GhcRn idR (Located (body idR)) -> NameSet
     hs_stmt (BindStmt pat _ _ _ _) = lPatImplicits pat
     hs_stmt (ApplicativeStmt args _ _) = unionNameSets (map do_arg args)
-      where do_arg (_, ApplicativeArgOne pat _) = lPatImplicits pat
+      where do_arg (_, ApplicativeArgOne pat _ _) = lPatImplicits pat
             do_arg (_, ApplicativeArgMany stmts _ _) = hs_lstmts stmts
     hs_stmt (LetStmt binds)      = hs_local_binds (unLoc binds)
     hs_stmt (BodyStmt {})        = emptyNameSet

@@ -5,15 +5,19 @@ module CmmCommonBlockElim
 where
 
 
+import GhcPrelude hiding (iterate, succ, unzip, zip)
+
 import BlockId
 import Cmm
 import CmmUtils
 import CmmSwitch (eqSwitchTargetWith)
 import CmmContFlowOpt
 -- import PprCmm ()
-import Prelude hiding (iterate, succ, unzip, zip)
 
-import Hoopl hiding (ChangeFlag)
+import Hoopl.Block
+import Hoopl.Graph
+import Hoopl.Label
+import Hoopl.Collections
 import Data.Bits
 import Data.Maybe (mapMaybe)
 import qualified Data.List as List
@@ -272,8 +276,8 @@ copyTicks env g
   | otherwise   = ofBlockMap (g_entry g) $ mapMap copyTo blockMap
   where -- Reverse block merge map
         blockMap = toBlockMap g
-        revEnv = mapFoldWithKey insertRev M.empty env
-        insertRev k x = M.insertWith (const (k:)) x [k]
+        revEnv = mapFoldlWithKey insertRev M.empty env
+        insertRev m k x = M.insertWith (const (k:)) x [k] m
         -- Copy ticks and scopes into the given block
         copyTo block = case M.lookup (entryLabel block) revEnv of
           Nothing -> block

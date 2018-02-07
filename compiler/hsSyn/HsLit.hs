@@ -19,6 +19,8 @@ module HsLit where
 
 #include "HsVersions.h"
 
+import GhcPrelude
+
 import {-# SOURCE #-} HsExpr( HsExpr, pprExpr )
 import BasicTypes ( IntegralLit(..),FractionalLit(..),negateIntegralLit,
                     negateFractionalLit,SourceText(..),pprWithSourceText )
@@ -101,7 +103,7 @@ data HsOverLit p
         ol_rebindable :: PostRn p Bool, -- Note [ol_rebindable]
         ol_witness :: HsExpr p,         -- Note [Overloaded literal witnesses]
         ol_type :: PostTc p Type }
-deriving instance (DataId p, DataId p) => Data (HsOverLit p)
+deriving instance (DataId p) => Data (HsOverLit p)
 
 -- Note [Literal source text] in BasicTypes for SourceText fields in
 -- the following
@@ -161,7 +163,7 @@ This witness should replace the literal.
 
 This dual role is unusual, because we're replacing 'fromInteger' with
 a call to fromInteger.  Reason: it allows commoning up of the fromInteger
-calls, which wouldn't be possible if the desguarar made the application.
+calls, which wouldn't be possible if the desugarer made the application.
 
 The PostTcType in each branch records the type the overload literal is
 found to have.
@@ -224,7 +226,7 @@ pp_st_suffix (SourceText st) suffix _   = text st <> suffix
 instance (SourceTextX p, OutputableBndrId p)
        => Outputable (HsOverLit p) where
   ppr (OverLit {ol_val=val, ol_witness=witness})
-        = ppr val <+> (ifPprDebug (parens (pprExpr witness)))
+        = ppr val <+> (whenPprDebug (parens (pprExpr witness)))
 
 instance Outputable OverLitVal where
   ppr (HsIntegral i)     = pprWithSourceText (il_text i) (integer (il_value i))
@@ -252,3 +254,29 @@ pmPprHsLit (HsInteger _ i _)  = integer i
 pmPprHsLit (HsRat _ f _)      = ppr f
 pmPprHsLit (HsFloatPrim _ f)  = ppr f
 pmPprHsLit (HsDoublePrim _ d) = ppr d
+
+-- | Returns 'True' for compound literals that will need parentheses.
+isCompoundHsLit :: HsLit x -> Bool
+isCompoundHsLit (HsChar {})        = False
+isCompoundHsLit (HsCharPrim {})    = False
+isCompoundHsLit (HsString {})      = False
+isCompoundHsLit (HsStringPrim {})  = False
+isCompoundHsLit (HsInt _ x)        = il_neg x
+isCompoundHsLit (HsIntPrim _ x)    = x < 0
+isCompoundHsLit (HsWordPrim _ x)   = x < 0
+isCompoundHsLit (HsInt64Prim _ x)  = x < 0
+isCompoundHsLit (HsWord64Prim _ x) = x < 0
+isCompoundHsLit (HsInteger _ x _)  = x < 0
+isCompoundHsLit (HsRat _ x _)      = fl_neg x
+isCompoundHsLit (HsFloatPrim _ x)  = fl_neg x
+isCompoundHsLit (HsDoublePrim _ x) = fl_neg x
+
+-- | Returns 'True' for compound overloaded literals that will need
+-- parentheses when used in an argument position.
+isCompoundHsOverLit :: HsOverLit x -> Bool
+isCompoundHsOverLit (OverLit { ol_val = olv }) = compound_ol_val olv
+  where
+    compound_ol_val :: OverLitVal -> Bool
+    compound_ol_val (HsIntegral x)   = il_neg x
+    compound_ol_val (HsFractional x) = fl_neg x
+    compound_ol_val (HsIsString {})  = False

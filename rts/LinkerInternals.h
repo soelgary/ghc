@@ -20,19 +20,10 @@
 typedef void SymbolAddr;
 typedef char SymbolName;
 
-/* See Linker.c Note [runtime-linker-phases] */
-typedef enum {
-    OBJECT_LOADED,
-    OBJECT_NEEDED,
-    OBJECT_RESOLVED,
-    OBJECT_UNLOADED,
-    OBJECT_DONT_RESOLVE
-} OStatus;
-
 /* Indication of section kinds for loaded objects.  Needed by
    the GC for deciding whether or not a pointer on the stack
    is a code pointer.
-   See Note [BFD import libraries].
+   See Note [BFD import library].
 */
 typedef
    enum { /* Section is code or readonly. e.g. .text or .r(o)data.  */
@@ -273,6 +264,9 @@ SymbolAddr* lookupSymbol_ (SymbolName* lbl);
 
 extern /*Str*/HashTable *symhash;
 
+pathchar*
+resolveSymbolAddr (pathchar* buffer, int size,
+                   SymbolAddr* symbol, uintptr_t* top);
 
 /*************************************************
  * Various bits of configuration

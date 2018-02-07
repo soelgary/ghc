@@ -60,6 +60,8 @@ module CoreFVs (
 
 #include "HsVersions.h"
 
+import GhcPrelude
+
 import CoreSyn
 import Id
 import IdInfo
@@ -384,13 +386,13 @@ orphNamesOfCo (CoherenceCo co1 co2) = orphNamesOfCo co1 `unionNameSet` orphNames
 orphNamesOfCo (KindCo co)           = orphNamesOfCo co
 orphNamesOfCo (SubCo co)            = orphNamesOfCo co
 orphNamesOfCo (AxiomRuleCo _ cs)    = orphNamesOfCos cs
+orphNamesOfCo (HoleCo _)            = emptyNameSet
 
 orphNamesOfProv :: UnivCoProvenance -> NameSet
 orphNamesOfProv UnsafeCoerceProv    = emptyNameSet
 orphNamesOfProv (PhantomProv co)    = orphNamesOfCo co
 orphNamesOfProv (ProofIrrelProv co) = orphNamesOfCo co
 orphNamesOfProv (PluginProv _)      = emptyNameSet
-orphNamesOfProv (HoleProv _)        = emptyNameSet
 
 orphNamesOfCos :: [Coercion] -> NameSet
 orphNamesOfCos = orphNamesOfThings orphNamesOfCo

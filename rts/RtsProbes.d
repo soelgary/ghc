@@ -12,6 +12,13 @@
 # endif
 #endif
 
+#if defined(__FreeBSD__)
+/* we need this otherwise dtrace complains about redeclared int types
+ * TODO: find a better way to do this
+ */
+#define _INTTYPES_H_
+#endif
+
 #include "HsFFI.h"
 #include "rts/EventLogFormat.h"
 
@@ -62,7 +69,7 @@ provider HaskellEvent {
   probe gc__work (EventCapNo);
   probe gc__done (EventCapNo);
   probe gc__global__sync (EventCapNo);
-  probe gc__stats (EventCapsetID, StgWord, StgWord, StgWord, StgWord, StgWord, StgWord, StgWord);
+  probe gc__stats (EventCapsetID, StgWord, StgWord, StgWord, StgWord, StgWord, StgWord, StgWord, StgWord);
   probe heap__info (EventCapsetID, StgWord, StgWord, StgWord, StgWord, StgWord);
   probe heap__allocated (EventCapNo, EventCapsetID, StgWord64);
   probe heap__size (EventCapsetID, StgWord);

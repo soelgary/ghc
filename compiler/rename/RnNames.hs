@@ -25,6 +25,8 @@ module RnNames (
 
 #include "HsVersions.h"
 
+import GhcPrelude
+
 import DynFlags
 import HsSyn
 import TcEnv
@@ -132,7 +134,7 @@ So there is an interesting design question in regards to transitive trust
 checking. Say I have a module B compiled with -XSafe. B is dependent on a bunch
 of modules and packages, some packages it requires to be trusted as its using
 -XTrustworthy modules from them. Now if I have a module A that doesn't use safe
-haskell at all and simply imports B, should A inherit all the the trust
+haskell at all and simply imports B, should A inherit all the trust
 requirements from B? Should A now also require that a package p is trusted since
 B required it?
 
@@ -175,16 +177,71 @@ rnImports imports = do
     return (decls, rdr_env, imp_avails, hpc_usage)
 
   where
+    -- See Note [Combining ImportAvails]
     combine :: [(LImportDecl GhcRn,  GlobalRdrEnv, ImportAvails, AnyHpcUsage)]
             -> ([LImportDecl GhcRn], GlobalRdrEnv, ImportAvails, AnyHpcUsage)
-    combine = foldr plus ([], emptyGlobalRdrEnv, emptyImportAvails, False)
+    combine ss =
+      let (decls, rdr_env, imp_avails, hpc_usage, finsts) = foldr
+            plus
+            ([], emptyGlobalRdrEnv, emptyImportAvails, False, emptyModuleSet)
+            ss
+      in (decls, rdr_env, imp_avails { imp_finsts = moduleSetElts finsts },
+            hpc_usage)
 
-    plus (decl,  gbl_env1, imp_avails1,hpc_usage1)
-         (decls, gbl_env2, imp_avails2,hpc_usage2)
+    plus (decl,  gbl_env1, imp_avails1, hpc_usage1)
+         (decls, gbl_env2, imp_avails2, hpc_usage2, finsts_set)
       = ( decl:decls,
           gbl_env1 `plusGlobalRdrEnv` gbl_env2,
-          imp_avails1 `plusImportAvails` imp_avails2,
-          hpc_usage1 || hpc_usage2 )
+          imp_avails1' `plusImportAvails` imp_avails2,
+          hpc_usage1 || hpc_usage2,
+          extendModuleSetList finsts_set new_finsts )
+      where
+      imp_avails1' = imp_avails1 { imp_finsts = [] }
+      new_finsts = imp_finsts imp_avails1
+
+{-
+Note [Combine ImportAvails]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+imp_finsts in ImportAvails is a list of family instance modules
+transitively depended on by an import. imp_finsts for a currently
+compiled module is a union of all the imp_finsts of imports.
+Computing the union of two lists of size N is O(N^2) and if we
+do it to M imports we end up with O(M*N^2). That can get very
+expensive for bigger module hierarchies.
+
+Union can be optimized to O(N log N) if we use a Set.
+imp_finsts is converted back and forth between dep_finsts, so
+changing a type of imp_finsts means either paying for the conversions
+or changing the type of dep_finsts as well.
+
+I've measured that the conversions would cost 20% of allocations on my
+test case, so that can be ruled out.
+
+Changing the type of dep_finsts forces checkFamInsts to
+get the module lists in non-deterministic order. If we wanted to restore
+the deterministic order, we'd have to sort there, which is an additional
+cost. As far as I can tell, using a non-deterministic order is fine there,
+but that's a brittle nonlocal property which I'd like to avoid.
+
+Additionally, dep_finsts is read from an interface file, so its "natural"
+type is a list. Which makes it a natural type for imp_finsts.
+
+Since rnImports.combine is really the only place that would benefit from
+it being a Set, it makes sense to optimize the hot loop in rnImports.combine
+without changing the representation.
+
+So here's what we do: instead of naively merging ImportAvails with
+plusImportAvails in a loop, we make plusImportAvails merge empty imp_finsts
+and compute the union on the side using Sets. When we're done, we can
+convert it back to a list. One nice side effect of this approach is that
+if there's a lot of overlap in the imp_finsts of imports, the
+Set doesn't really need to grow and we don't need to allocate.
+
+Running generateModules from Trac #14693 with DEPTH=16, WIDTH=30 finishes in
+23s before, and 11s after.
+-}
+
+
 
 -- | Given a located import declaration @decl@ from @this_mod@,
 -- calculate the following pieces of information:
@@ -266,8 +323,7 @@ rnImportDecl this_mod
     -- the non-boot module depends on the compilation order, which
     -- is not deterministic.  The hs-boot test can show this up.
     dflags <- getDynFlags
-    warnIf NoReason
-           (want_boot && not (mi_boot iface) && isOneShot (ghcMode dflags))
+    warnIf (want_boot && not (mi_boot iface) && isOneShot (ghcMode dflags))
            (warnRedundantSourceImport imp_mod_name)
     when (mod_safe && not (safeImportsOn dflags)) $
         addErr (text "safe import can't be used as Safe Haskell isn't on!"
@@ -638,24 +694,16 @@ getLocalNonValBinders fixity_env
                -> [(Name, [FieldLabel])]
     mk_fld_env d names flds = concatMap find_con_flds (dd_cons d)
       where
-        find_con_flds (L _ (ConDeclH98 { con_name    = L _ rdr
-                                       , con_details = RecCon cdflds }))
+        find_con_flds (L _ (ConDeclH98 { con_name = L _ rdr
+                                       , con_args = RecCon cdflds }))
             = [( find_con_name rdr
                , concatMap find_con_decl_flds (unLoc cdflds) )]
-        find_con_flds (L _ (ConDeclGADT
-                              { con_names = rdrs
-                              , con_type = (HsIB { hsib_body = res_ty})}))
-            = map (\ (L _ rdr) -> ( find_con_name rdr
-                                  , concatMap find_con_decl_flds cdflds))
-                  rdrs
-            where
-              (_tvs, _cxt, tau) = splitLHsSigmaTy res_ty
-              cdflds = case tau of
-                 L _ (HsFunTy
-                      (L _ (HsAppsTy
-                        [L _ (HsAppPrefix (L _ (HsRecTy flds)))])) _) -> flds
-                 L _ (HsFunTy (L _ (HsRecTy flds)) _) -> flds
-                 _                                    -> []
+        find_con_flds (L _ (ConDeclGADT { con_names = rdrs
+                                        , con_args = RecCon flds }))
+            = [ ( find_con_name rdr
+                 , concatMap find_con_decl_flds (unLoc flds))
+              | L _ rdr <- rdrs ]
+
         find_con_flds _ = []
 
         find_con_name rdr
@@ -663,6 +711,7 @@ getLocalNonValBinders fixity_env
               find (\ n -> nameOccName n == rdrNameOcc rdr) names
         find_con_decl_flds (L _ x)
           = map find_con_decl_fld (cd_fld_names x)
+
         find_con_decl_fld  (L _ (FieldOcc (L _ rdr) _))
           = expectJust "getLocalNonValBinders/find_con_decl_fld" $
               find (\ fl -> flLabel fl == lbl) flds
@@ -689,14 +738,15 @@ getLocalNonValBinders fixity_env
 
     new_di :: Bool -> Maybe Name -> DataFamInstDecl GhcPs
                    -> RnM (AvailInfo, [(Name, [FieldLabel])])
-    new_di overload_ok mb_cls ti_decl
-        = do { main_name <- lookupFamInstName mb_cls (dfid_tycon ti_decl)
-             ; let (bndrs, flds) = hsDataFamInstBinders ti_decl
+    new_di overload_ok mb_cls dfid@(DataFamInstDecl { dfid_eqn =
+                                     HsIB { hsib_body = ti_decl }})
+        = do { main_name <- lookupFamInstName mb_cls (feqn_tycon ti_decl)
+             ; let (bndrs, flds) = hsDataFamInstBinders dfid
              ; sub_names <- mapM newTopSrcBinder bndrs
              ; flds' <- mapM (newRecordSelector overload_ok sub_names) flds
              ; let avail    = AvailTC (unLoc main_name) sub_names flds'
                                   -- main_name is not bound here!
-                   fld_env  = mk_fld_env (dfid_defn ti_decl) sub_names flds'
+                   fld_env  = mk_fld_env (feqn_rhs ti_decl) sub_names flds'
              ; return (avail, fld_env) }
 
     new_loc_di :: Bool -> Maybe Name -> LDataFamInstDecl GhcPs
@@ -763,7 +813,7 @@ The situation is made more complicated by associated types. E.g.
 Then M's export_avails are (recall the AvailTC invariant from Avails.hs)
   C(C,T), T(T,T1,T2,T3)
 Notice that T appears *twice*, once as a child and once as a parent. From
-this list we construt a raw list including
+this list we construct a raw list including
    T -> (T, T( T1, T2, T3 ), Nothing)
    T -> (C, C( C, T ),       Nothing)
 and we combine these (in function 'combine' in 'imp_occ_env' in
@@ -1182,7 +1232,7 @@ warnMissingSignatures gbl_env
              pat_syns = tcg_patsyns gbl_env
 
          -- Warn about missing signatures
-         -- Do this only when we we have a type to offer
+         -- Do this only when we have a type to offer
        ; warn_missing_sigs  <- woptM Opt_WarnMissingSignatures
        ; warn_only_exported <- woptM Opt_WarnMissingExportedSignatures
        ; warn_pat_syns      <- woptM Opt_WarnMissingPatternSynonymSignatures
@@ -1229,7 +1279,7 @@ warnMissingSignatures gbl_env
 {-
 Note [The ImportMap]
 ~~~~~~~~~~~~~~~~~~~~
-The ImportMap is a short-lived intermediate data struture records, for
+The ImportMap is a short-lived intermediate data structure records, for
 each import declaration, what stuff brought into scope by that
 declaration is actually used in the module.
 

@@ -28,19 +28,20 @@ module DriverPipeline (
    phaseOutputFilename, getOutputFilename, getPipeState, getPipeEnv,
    hscPostBackendPhase, getLocation, setModLocation, setDynFlags,
    runPhase, exeFileName,
-   mkExtraObjToLinkIntoBinary, mkNoteObjsToLinkIntoBinary,
    maybeCreateManifest,
    linkingNeeded, checkLinkInfo, writeInterfaceOnlyMode
   ) where
 
 #include "HsVersions.h"
 
+import GhcPrelude
+
 import PipelineMonad
 import Packages
 import HeaderInfo
 import DriverPhases
 import SysTools
-import Elf
+import SysTools.ExtraObj
 import HscMain
 import Finder
 import HscTypes hiding ( Hsc )
@@ -62,13 +63,14 @@ import TcRnTypes
 import Hooks
 import qualified GHC.LanguageExtensions as LangExt
 import FileCleanup
+import Ar
 
 import Exception
 import System.Directory
 import System.FilePath
 import System.IO
 import Control.Monad
-import Data.List        ( isSuffixOf )
+import Data.List        ( isSuffixOf, intercalate )
 import Data.Maybe
 import Data.Version
 
@@ -235,10 +237,7 @@ compileOne' m_tc_result mHscMessage
        input_fn    = expectJust "compile:hs" (ml_hs_file location)
        input_fnpp  = ms_hspp_file summary
        mod_graph   = hsc_mod_graph hsc_env0
-       needsLinker = any (\ModSummary {ms_hspp_opts} ->
-                            xopt LangExt.TemplateHaskell ms_hspp_opts
-                            || xopt LangExt.QuasiQuotes ms_hspp_opts
-                         ) mod_graph
+       needsLinker = needsTemplateHaskellOrQQ mod_graph
        isDynWay    = any (== WayDyn) (ways dflags0)
        isProfWay   = any (== WayProf) (ways dflags0)
        internalInterpreter = not (gopt Opt_ExternalInterpreter dflags0)
@@ -425,7 +424,7 @@ link' dflags batch_attempt_linking hpt
         -- Don't showPass in Batch mode; doLink will do that for us.
         let link = case ghcLink dflags of
                 LinkBinary    -> linkBinary
-                LinkStaticLib -> linkStaticLibCheck
+                LinkStaticLib -> linkStaticLib
                 LinkDynLib    -> linkDynLibCheck
                 other         -> panicBadLink other
         link dflags obj_files pkg_deps
@@ -475,50 +474,11 @@ linkingNeeded dflags staticLink linkables pkg_deps = do
            then return True
            else checkLinkInfo dflags pkg_deps exe_file
 
--- Returns 'False' if it was, and we can avoid linking, because the
--- previous binary was linked with "the same options".
-checkLinkInfo :: DynFlags -> [InstalledUnitId] -> FilePath -> IO Bool
-checkLinkInfo dflags pkg_deps exe_file
- | not (platformSupportsSavingLinkOpts (platformOS (targetPlatform dflags)))
- -- ToDo: Windows and OS X do not use the ELF binary format, so
- -- readelf does not work there.  We need to find another way to do
- -- this.
- = return False -- conservatively we should return True, but not
-                -- linking in this case was the behaviour for a long
-                -- time so we leave it as-is.
- | otherwise
- = do
-   link_info <- getLinkInfo dflags pkg_deps
-   debugTraceMsg dflags 3 $ text ("Link info: " ++ link_info)
-   m_exe_link_info <- readElfNoteAsString dflags exe_file
-                          ghcLinkInfoSectionName ghcLinkInfoNoteName
-   let sameLinkInfo = (Just link_info == m_exe_link_info)
-   debugTraceMsg dflags 3 $ case m_exe_link_info of
-     Nothing -> text "Exe link info: Not found"
-     Just s
-       | sameLinkInfo -> text ("Exe link info is the same")
-       | otherwise    -> text ("Exe link info is different: " ++ s)
-   return (not sameLinkInfo)
-
-platformSupportsSavingLinkOpts :: OS -> Bool
-platformSupportsSavingLinkOpts os
-  | os == OSSolaris2 = False -- see #5382
-  | otherwise        = osElfTarget os
-
--- See Note [LinkInfo section]
-ghcLinkInfoSectionName :: String
-ghcLinkInfoSectionName = ".debug-ghc-link-info"
-   -- if we use the ".debug" prefix, then strip will strip it by default
-
--- Identifier for the note (see Note [LinkInfo section])
-ghcLinkInfoNoteName :: String
-ghcLinkInfoNoteName = "GHC link info"
-
 findHSLib :: DynFlags -> [String] -> String -> IO (Maybe FilePath)
 findHSLib dflags dirs lib = do
   let batch_lib_file = if WayDyn `notElem` ways dflags
-                       then "lib" ++ lib <.> "a"
-                       else mkSOName (targetPlatform dflags) lib
+                      then "lib" ++ lib <.> "a"
+                      else mkSOName (targetPlatform dflags) lib
   found <- filterM doesFileExist (map (</> batch_lib_file) dirs)
   case found of
     [] -> return Nothing
@@ -576,7 +536,7 @@ doLink dflags stop_phase o_files
   = case ghcLink dflags of
         NoLink        -> return ()
         LinkBinary    -> linkBinary         dflags o_files []
-        LinkStaticLib -> linkStaticLibCheck dflags o_files []
+        LinkStaticLib -> linkStaticLib      dflags o_files []
         LinkDynLib    -> linkDynLibCheck    dflags o_files []
         other         -> panicBadLink other
 
@@ -831,6 +791,65 @@ getOutputFilename stop_phase output basename dflags next_phase maybe_location
              | Just loc <- maybe_location = ml_obj_file loc
              | Just d <- odir = d </> persistent
              | otherwise      = persistent
+
+
+-- | The fast LLVM Pipeline skips the mangler and assembler,
+-- emitting object code directly from llc.
+--
+-- slow: opt -> llc -> .s -> mangler -> as -> .o
+-- fast: opt -> llc -> .o
+--
+-- hidden flag: -ffast-llvm
+--
+-- if keep-s-files is specified, we need to go through
+-- the slow pipeline (Kavon Farvardin requested this).
+fastLlvmPipeline :: DynFlags -> Bool
+fastLlvmPipeline dflags
+  = not (gopt Opt_KeepSFiles dflags) && gopt Opt_FastLlvm dflags
+
+-- | LLVM Options. These are flags to be passed to opt and llc, to ensure
+-- consistency we list them in pairs, so that they form groups.
+llvmOptions :: DynFlags
+            -> [(String, String)]  -- ^ pairs of (opt, llc) arguments
+llvmOptions dflags =
+       [("-enable-tbaa -tbaa",  "-enable-tbaa") | gopt Opt_LlvmTBAA dflags ]
+    ++ [("-relocation-model=" ++ rmodel
+        ,"-relocation-model=" ++ rmodel) | not (null rmodel)]
+    ++ [("-stack-alignment=" ++ (show align)
+        ,"-stack-alignment=" ++ (show align)) | align > 0 ]
+    ++ [("", "-filetype=obj") | fastLlvmPipeline dflags ]
+
+    -- Additional llc flags
+    ++ [("", "-mcpu=" ++ mcpu)   | not (null mcpu) ]
+    ++ [("", "-mattr=" ++ attrs) | not (null attrs) ]
+
+  where target = LLVM_TARGET
+        Just (LlvmTarget _ mcpu mattr) = lookup target (llvmTargets dflags)
+
+        -- Relocation models
+        rmodel | gopt Opt_PIC dflags        = "pic"
+               | positionIndependent dflags = "pic"
+               | WayDyn `elem` ways dflags  = "dynamic-no-pic"
+               | otherwise                  = "static"
+
+        align :: Int
+        align = case platformArch (targetPlatform dflags) of
+                  ArchX86_64 | isAvxEnabled dflags -> 32
+                  _                                -> 0
+
+        attrs :: String
+        attrs = intercalate "," $ mattr
+              ++ ["+sse42"   | isSse4_2Enabled dflags   ]
+              ++ ["+sse2"    | isSse2Enabled dflags     ]
+              ++ ["+sse"     | isSseEnabled dflags      ]
+              ++ ["+avx512f" | isAvx512fEnabled dflags  ]
+              ++ ["+avx2"    | isAvx2Enabled dflags     ]
+              ++ ["+avx"     | isAvxEnabled dflags      ]
+              ++ ["+avx512cd"| isAvx512cdEnabled dflags ]
+              ++ ["+avx512er"| isAvx512erEnabled dflags ]
+              ++ ["+avx512pf"| isAvx512pfEnabled dflags ]
+              ++ ["+bmi"     | isBmiEnabled dflags      ]
+              ++ ["+bmi2"    | isBmi2Enabled dflags     ]
 
 -- -----------------------------------------------------------------------------
 -- | Each phase in the pipeline returns the next phase to execute, and the
@@ -1429,121 +1448,115 @@ runPhase (RealPhase SplitAs) _input_fn dflags
 
 -----------------------------------------------------------------------------
 -- LlvmOpt phase
-
 runPhase (RealPhase LlvmOpt) input_fn dflags
   = do
-    let opt_lvl  = max 0 (min 2 $ optLevel dflags)
-        -- don't specify anything if user has specified commands. We do this
-        -- for opt but not llc since opt is very specifically for optimisation
-        -- passes only, so if the user is passing us extra options we assume
-        -- they know what they are doing and don't get in the way.
-        optFlag  = if null (getOpts dflags opt_lo)
-                       then map SysTools.Option $ words (llvmOpts !! opt_lvl)
-                       else []
-        tbaa | gopt Opt_LlvmTBAA dflags = "--enable-tbaa=true"
-             | otherwise                = "--enable-tbaa=false"
-
-
     output_fn <- phaseOutputFilename LlvmLlc
 
     liftIO $ SysTools.runLlvmOpt dflags
-               ([ SysTools.FileOption "" input_fn,
-                    SysTools.Option "-o",
-                    SysTools.FileOption "" output_fn]
-                ++ optFlag
-                ++ [SysTools.Option tbaa])
+               (   optFlag
+                ++ defaultOptions ++
+                [ SysTools.FileOption "" input_fn
+                , SysTools.Option "-o"
+                , SysTools.FileOption "" output_fn]
+                )
 
     return (RealPhase LlvmLlc, output_fn)
   where
         -- we always (unless -optlo specified) run Opt since we rely on it to
         -- fix up some pretty big deficiencies in the code we generate
-        llvmOpts =  [ "-mem2reg -globalopt"
-                    , "-O1 -globalopt"
-                    , "-O2"
-                    ]
+        llvmOpts = case optLevel dflags of
+          0 -> "-mem2reg -globalopt"
+          1 -> "-O1 -globalopt"
+          _ -> "-O2"
+
+        -- don't specify anything if user has specified commands. We do this
+        -- for opt but not llc since opt is very specifically for optimisation
+        -- passes only, so if the user is passing us extra options we assume
+        -- they know what they are doing and don't get in the way.
+        optFlag = if null (getOpts dflags opt_lo)
+                  then map SysTools.Option $ words llvmOpts
+                  else []
+
+        defaultOptions = map SysTools.Option . concat . fmap words . fst
+                       $ unzip (llvmOptions dflags)
 
 -----------------------------------------------------------------------------
 -- LlvmLlc phase
 
 runPhase (RealPhase LlvmLlc) input_fn dflags
   = do
-    let opt_lvl = max 0 (min 2 $ optLevel dflags)
-        -- iOS requires external references to be loaded indirectly from the
-        -- DATA segment or dyld traps at runtime writing into TEXT: see #7722
-        rmodel | platformOS (targetPlatform dflags) == OSiOS = "dynamic-no-pic"
-               | gopt Opt_PIC dflags                         = "pic"
-               | WayDyn `elem` ways dflags                   = "dynamic-no-pic"
-               | otherwise                                   = "static"
-        tbaa | gopt Opt_LlvmTBAA dflags = "--enable-tbaa=true"
-             | otherwise                = "--enable-tbaa=false"
-
-    -- hidden debugging flag '-dno-llvm-mangler' to skip mangling
-    let next_phase = case gopt Opt_NoLlvmMangler dflags of
-                         False                            -> LlvmMangle
-                         True | gopt Opt_SplitObjs dflags -> Splitter
-                         True                             -> As False
+    next_phase <- if fastLlvmPipeline dflags
+                  then maybeMergeForeign
+                  -- hidden debugging flag '-dno-llvm-mangler' to skip mangling
+                  else case gopt Opt_NoLlvmMangler dflags of
+                         False                            -> return LlvmMangle
+                         True | gopt Opt_SplitObjs dflags -> return Splitter
+                         True                             -> return (As False)
 
     output_fn <- phaseOutputFilename next_phase
 
     liftIO $ SysTools.runLlvmLlc dflags
-                ([ SysTools.Option (llvmOpts !! opt_lvl),
-                    SysTools.Option $ "-relocation-model=" ++ rmodel,
-                    SysTools.FileOption "" input_fn,
-                    SysTools.Option "-o", SysTools.FileOption "" output_fn]
-                ++ [SysTools.Option tbaa]
-                ++ map SysTools.Option fpOpts
-                ++ map SysTools.Option abiOpts
-                ++ map SysTools.Option sseOpts
-                ++ map SysTools.Option avxOpts
-                ++ map SysTools.Option avx512Opts
-                ++ map SysTools.Option stackAlignOpts)
+                (  optFlag
+                ++ defaultOptions
+                ++ [ SysTools.FileOption "" input_fn
+                   , SysTools.Option "-o"
+                   , SysTools.FileOption "" output_fn
+                   ]
+                )
 
     return (RealPhase next_phase, output_fn)
   where
-        -- Bug in LLVM at O3 on OSX.
-        llvmOpts = if platformOS (targetPlatform dflags) == OSDarwin
-                   then ["-O1", "-O2", "-O2"]
-                   else ["-O1", "-O2", "-O3"]
-        -- On ARMv7 using LLVM, LLVM fails to allocate floating point registers
-        -- while compiling GHC source code. It's probably due to fact that it
-        -- does not enable VFP by default. Let's do this manually here
-        fpOpts = case platformArch (targetPlatform dflags) of
-                   ArchARM ARMv7 ext _ -> if (elem VFPv3 ext)
-                                      then ["-mattr=+v7,+vfp3"]
-                                      else if (elem VFPv3D16 ext)
-                                           then ["-mattr=+v7,+vfp3,+d16"]
-                                           else []
-                   ArchARM ARMv6 ext _ -> if (elem VFPv2 ext)
-                                          then ["-mattr=+v6,+vfp2"]
-                                          else ["-mattr=+v6"]
-                   _                 -> []
-        -- On Ubuntu/Debian with ARM hard float ABI, LLVM's llc still
-        -- compiles into soft-float ABI. We need to explicitly set abi
-        -- to hard
-        abiOpts = case platformArch (targetPlatform dflags) of
-                    ArchARM _ _ HARD -> ["-float-abi=hard"]
-                    ArchARM _ _ _    -> []
-                    _                -> []
+    -- Note [Clamping of llc optimizations]
+    --
+    -- See #13724
+    --
+    -- we clamp the llc optimization between [1,2]. This is because passing -O0
+    -- to llc 3.9 or llc 4.0, the naive register allocator can fail with
+    --
+    --   Error while trying to spill R1 from class GPR: Cannot scavenge register
+    --   without an emergency spill slot!
+    --
+    -- Observed at least with target 'arm-unknown-linux-gnueabihf'.
+    --
+    --
+    -- With LLVM4, llc -O3 crashes when ghc-stage1 tries to compile
+    --   rts/HeapStackCheck.cmm
+    --
+    -- llc -O3 '-mtriple=arm-unknown-linux-gnueabihf' -enable-tbaa /var/folders/fv/xqjrpfj516n5xq_m_ljpsjx00000gn/T/ghc33674_0/ghc_6.bc -o /var/folders/fv/xqjrpfj516n5xq_m_ljpsjx00000gn/T/ghc33674_0/ghc_7.lm_s
+    -- 0  llc                      0x0000000102ae63e8 llvm::sys::PrintStackTrace(llvm::raw_ostream&) + 40
+    -- 1  llc                      0x0000000102ae69a6 SignalHandler(int) + 358
+    -- 2  libsystem_platform.dylib 0x00007fffc23f4b3a _sigtramp + 26
+    -- 3  libsystem_c.dylib        0x00007fffc226498b __vfprintf + 17876
+    -- 4  llc                      0x00000001029d5123 llvm::SelectionDAGISel::LowerArguments(llvm::Function const&) + 5699
+    -- 5  llc                      0x0000000102a21a35 llvm::SelectionDAGISel::SelectAllBasicBlocks(llvm::Function const&) + 3381
+    -- 6  llc                      0x0000000102a202b1 llvm::SelectionDAGISel::runOnMachineFunction(llvm::MachineFunction&) + 1457
+    -- 7  llc                      0x0000000101bdc474 (anonymous namespace)::ARMDAGToDAGISel::runOnMachineFunction(llvm::MachineFunction&) + 20
+    -- 8  llc                      0x00000001025573a6 llvm::MachineFunctionPass::runOnFunction(llvm::Function&) + 134
+    -- 9  llc                      0x000000010274fb12 llvm::FPPassManager::runOnFunction(llvm::Function&) + 498
+    -- 10 llc                      0x000000010274fd23 llvm::FPPassManager::runOnModule(llvm::Module&) + 67
+    -- 11 llc                      0x00000001027501b8 llvm::legacy::PassManagerImpl::run(llvm::Module&) + 920
+    -- 12 llc                      0x000000010195f075 compileModule(char**, llvm::LLVMContext&) + 12133
+    -- 13 llc                      0x000000010195bf0b main + 491
+    -- 14 libdyld.dylib            0x00007fffc21e5235 start + 1
+    -- Stack dump:
+    -- 0.  Program arguments: llc -O3 -mtriple=arm-unknown-linux-gnueabihf -enable-tbaa /var/folders/fv/xqjrpfj516n5xq_m_ljpsjx00000gn/T/ghc33674_0/ghc_6.bc -o /var/folders/fv/xqjrpfj516n5xq_m_ljpsjx00000gn/T/ghc33674_0/ghc_7.lm_s
+    -- 1.  Running pass 'Function Pass Manager' on module '/var/folders/fv/xqjrpfj516n5xq_m_ljpsjx00000gn/T/ghc33674_0/ghc_6.bc'.
+    -- 2.  Running pass 'ARM Instruction Selection' on function '@"stg_gc_f1$def"'
+    --
+    -- Observed at least with -mtriple=arm-unknown-linux-gnueabihf -enable-tbaa
+    --
+    llvmOpts = case optLevel dflags of
+      0 -> "-O1" -- required to get the non-naive reg allocator. Passing -regalloc=greedy is not sufficient.
+      1 -> "-O1"
+      _ -> "-O2"
 
-        sseOpts | isSse4_2Enabled dflags = ["-mattr=+sse42"]
-                | isSse2Enabled dflags   = ["-mattr=+sse2"]
-                | isSseEnabled dflags    = ["-mattr=+sse"]
-                | otherwise              = []
+    optFlag = if null (getOpts dflags opt_lc)
+              then map SysTools.Option $ words llvmOpts
+              else []
 
-        avxOpts | isAvx512fEnabled dflags = ["-mattr=+avx512f"]
-                | isAvx2Enabled dflags    = ["-mattr=+avx2"]
-                | isAvxEnabled dflags     = ["-mattr=+avx"]
-                | otherwise               = []
+    defaultOptions = map SysTools.Option . concat . fmap words . snd
+                   $ unzip (llvmOptions dflags)
 
-        avx512Opts =
-          [ "-mattr=+avx512cd" | isAvx512cdEnabled dflags ] ++
-          [ "-mattr=+avx512er" | isAvx512erEnabled dflags ] ++
-          [ "-mattr=+avx512pf" | isAvx512pfEnabled dflags ]
-
-        stackAlignOpts =
-            case platformArch (targetPlatform dflags) of
-              ArchX86_64 | isAvxEnabled dflags -> ["-stack-alignment=32"]
-              _                                -> []
 
 -----------------------------------------------------------------------------
 -- LlvmMangle phase
@@ -1626,142 +1639,6 @@ getLocation src_flavour mod_name = do
                       | otherwise = location3
         return location4
 
-mkExtraObj :: DynFlags -> Suffix -> String -> IO FilePath
-mkExtraObj dflags extn xs
- = do cFile <- newTempName dflags TFL_CurrentModule extn
-      oFile <- newTempName dflags TFL_GhcSession "o"
-      writeFile cFile xs
-      ccInfo <- liftIO $ getCompilerInfo dflags
-      SysTools.runCc dflags
-                ([Option        "-c",
-                  FileOption "" cFile,
-                  Option        "-o",
-                  FileOption "" oFile]
-                 ++ if extn /= "s"
-                        then cOpts
-                        else asmOpts ccInfo)
-      return oFile
-    where
-      -- Pass a different set of options to the C compiler depending one whether
-      -- we're compiling C or assembler. When compiling C, we pass the usual
-      -- set of include directories and PIC flags.
-      cOpts = map Option (picCCOpts dflags)
-                    ++ map (FileOption "-I")
-                            (includeDirs $ getPackageDetails dflags rtsUnitId)
-
-      -- When compiling assembler code, we drop the usual C options, and if the
-      -- compiler is Clang, we add an extra argument to tell Clang to ignore
-      -- unused command line options. See trac #11684.
-      asmOpts ccInfo =
-            if any (ccInfo ==) [Clang, AppleClang, AppleClang51]
-                then [Option "-Qunused-arguments"]
-                else []
-
-
--- When linking a binary, we need to create a C main() function that
--- starts everything off.  This used to be compiled statically as part
--- of the RTS, but that made it hard to change the -rtsopts setting,
--- so now we generate and compile a main() stub as part of every
--- binary and pass the -rtsopts setting directly to the RTS (#5373)
---
-mkExtraObjToLinkIntoBinary :: DynFlags -> IO FilePath
-mkExtraObjToLinkIntoBinary dflags = do
-   when (gopt Opt_NoHsMain dflags && haveRtsOptsFlags dflags) $ do
-      putLogMsg dflags NoReason SevInfo noSrcSpan
-          (defaultUserStyle dflags)
-          (text "Warning: -rtsopts and -with-rtsopts have no effect with -no-hs-main." $$
-           text "    Call hs_init_ghc() from your main() function to set these options.")
-
-   mkExtraObj dflags "c" (showSDoc dflags main)
-
- where
-  main
-   | gopt Opt_NoHsMain dflags = Outputable.empty
-   | otherwise = vcat [
-      text "#include \"Rts.h\"",
-      text "extern StgClosure ZCMain_main_closure;",
-      text "int main(int argc, char *argv[])",
-      char '{',
-      text " RtsConfig __conf = defaultRtsConfig;",
-      text " __conf.rts_opts_enabled = "
-          <> text (show (rtsOptsEnabled dflags)) <> semi,
-      text " __conf.rts_opts_suggestions = "
-          <> text (if rtsOptsSuggestions dflags
-                      then "true"
-                      else "false") <> semi,
-      case rtsOpts dflags of
-         Nothing   -> Outputable.empty
-         Just opts -> text "    __conf.rts_opts= " <>
-                        text (show opts) <> semi,
-      text " __conf.rts_hs_main = true;",
-      text " return hs_main(argc,argv,&ZCMain_main_closure,__conf);",
-      char '}',
-      char '\n' -- final newline, to keep gcc happy
-     ]
-
--- Write out the link info section into a new assembly file. Previously
--- this was included as inline assembly in the main.c file but this
--- is pretty fragile. gas gets upset trying to calculate relative offsets
--- that span the .note section (notably .text) when debug info is present
-mkNoteObjsToLinkIntoBinary :: DynFlags -> [InstalledUnitId] -> IO [FilePath]
-mkNoteObjsToLinkIntoBinary dflags dep_packages = do
-   link_info <- getLinkInfo dflags dep_packages
-
-   if (platformSupportsSavingLinkOpts (platformOS (targetPlatform dflags)))
-     then fmap (:[]) $ mkExtraObj dflags "s" (showSDoc dflags (link_opts link_info))
-     else return []
-
-  where
-    link_opts info = hcat [
-      -- "link info" section (see Note [LinkInfo section])
-      makeElfNote dflags ghcLinkInfoSectionName ghcLinkInfoNoteName 0 info,
-
-      -- ALL generated assembly must have this section to disable
-      -- executable stacks.  See also
-      -- compiler/nativeGen/AsmCodeGen.hs for another instance
-      -- where we need to do this.
-      if platformHasGnuNonexecStack (targetPlatform dflags)
-        then text ".section .note.GNU-stack,\"\",@progbits\n"
-        else Outputable.empty
-      ]
-
--- | Return the "link info" string
---
--- See Note [LinkInfo section]
-getLinkInfo :: DynFlags -> [InstalledUnitId] -> IO String
-getLinkInfo dflags dep_packages = do
-   package_link_opts <- getPackageLinkOpts dflags dep_packages
-   pkg_frameworks <- if platformUsesFrameworks (targetPlatform dflags)
-                     then getPackageFrameworks dflags dep_packages
-                     else return []
-   let extra_ld_inputs = ldInputs dflags
-   let
-      link_info = (package_link_opts,
-                   pkg_frameworks,
-                   rtsOpts dflags,
-                   rtsOptsEnabled dflags,
-                   gopt Opt_NoHsMain dflags,
-                   map showOpt extra_ld_inputs,
-                   getOpts dflags opt_l)
-   --
-   return (show link_info)
-
-
-{- Note [LinkInfo section]
-   ~~~~~~~~~~~~~~~~~~~~~~~
-
-The "link info" is a string representing the parameters of the link. We save
-this information in the binary, and the next time we link, if nothing else has
-changed, we use the link info stored in the existing binary to decide whether
-to re-link or not.
-
-The "link info" string is stored in a ELF section called ".debug-ghc-link-info"
-(see ghcLinkInfoSectionName) with the SHT_NOTE type.  For some time, it used to
-not follow the specified record-based format (see #11022).
-
--}
-
-
 -----------------------------------------------------------------------------
 -- Look for the /* GHC_PACKAGES ... */ comment at the top of a .hc file
 
@@ -1793,7 +1670,7 @@ Note [-Xlinker -rpath vs -Wl,-rpath]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 -Wl takes a comma-separated list of options which in the case of
--Wl,-rpath -Wl,some,path,with,commas parses the the path with commas
+-Wl,-rpath -Wl,some,path,with,commas parses the path with commas
 as separate options.
 Buck, the build system, produces paths with commas in them.
 
@@ -1933,13 +1810,12 @@ linkBinary' staticLink dflags o_files dep_packages = do
                       ++ [ SysTools.Option "-o"
                          , SysTools.FileOption "" output_fn
                          ]
+                      ++ libmLinkOpts
                       ++ map SysTools.Option (
                          []
 
-                      -- See Note [No PIE eating when linking]
-                      ++ (if sGccSupportsNoPie mySettings
-                             then ["-no-pie"]
-                             else [])
+                      -- See Note [No PIE when linking]
+                      ++ picCCOpts dflags
 
                       -- Permit the linker to auto link _symbol to _imp_symbol.
                       -- This lets us link against DLLs without needing an "import library".
@@ -1957,7 +1833,7 @@ linkBinary' staticLink dflags o_files dep_packages = do
                       -- on x86.
                       ++ (if sLdSupportsCompactUnwind mySettings &&
                              not staticLink &&
-                             (platformOS platform == OSDarwin || platformOS platform == OSiOS) &&
+                             (platformOS platform == OSDarwin) &&
                              case platformArch platform of
                                ArchX86 -> True
                                ArchX86_64 -> True
@@ -2080,12 +1956,35 @@ linkDynLibCheck dflags o_files dep_packages
 
     linkDynLib dflags o_files dep_packages
 
-linkStaticLibCheck :: DynFlags -> [String] -> [InstalledUnitId] -> IO ()
-linkStaticLibCheck dflags o_files dep_packages
- = do
-    when (platformOS (targetPlatform dflags) `notElem` [OSiOS, OSDarwin]) $
-      throwGhcExceptionIO (ProgramError "Static archive creation only supported on Darwin/OS X/iOS")
-    linkBinary' True dflags o_files dep_packages
+-- | Linking a static lib will not really link anything. It will merely produce
+-- a static archive of all dependent static libraries. The resulting library
+-- will still need to be linked with any remaining link flags.
+linkStaticLib :: DynFlags -> [String] -> [InstalledUnitId] -> IO ()
+linkStaticLib dflags o_files dep_packages = do
+  let extra_ld_inputs = [ f | FileOption _ f <- ldInputs dflags ]
+      modules = o_files ++ extra_ld_inputs
+      output_fn = exeFileName True dflags
+
+  full_output_fn <- if isAbsolute output_fn
+                    then return output_fn
+                    else do d <- getCurrentDirectory
+                            return $ normalise (d </> output_fn)
+  output_exists <- doesFileExist full_output_fn
+  (when output_exists) $ removeFile full_output_fn
+
+  pkg_cfgs <- getPreloadPackagesAnd dflags dep_packages
+  archives <- concat <$> mapM (collectArchives dflags) pkg_cfgs
+
+  ar <- foldl mappend
+        <$> (Archive <$> mapM loadObj modules)
+        <*> mapM loadAr archives
+
+  if sLdIsGnuLd (settings dflags)
+    then writeGNUAr output_fn $ afilter (not . isGNUSymdef) ar
+    else writeBSDAr output_fn $ afilter (not . isBSDSymdef) ar
+
+  -- run ranlib over the archive. write*Ar does *not* create the symbol index.
+  runRanlib dflags [SysTools.FileOption "" output_fn]
 
 -- -----------------------------------------------------------------------------
 -- Running CPP
@@ -2231,7 +2130,7 @@ joinObjectFiles dflags o_files output_fn = do
                        SysTools.Option "-nostdlib",
                        SysTools.Option "-Wl,-r"
                      ]
-                        -- See Note [No PIE eating while linking] in SysTools
+                        -- See Note [No PIE while linking] in SysTools
                      ++ (if sGccSupportsNoPie mySettings
                           then [SysTools.Option "-no-pie"]
                           else [])
@@ -2304,20 +2203,19 @@ touchObjectFile dflags path = do
   createDirectoryIfMissing True $ takeDirectory path
   SysTools.touch dflags "Touching object file" path
 
-haveRtsOptsFlags :: DynFlags -> Bool
-haveRtsOptsFlags dflags =
-         isJust (rtsOpts dflags) || case rtsOptsEnabled dflags of
-                                        RtsOptsSafeOnly -> False
-                                        _ -> True
-
 -- | Find out path to @ghcversion.h@ file
 getGhcVersionPathName :: DynFlags -> IO FilePath
 getGhcVersionPathName dflags = do
-  dirs <- getPackageIncludePath dflags [toInstalledUnitId rtsUnitId]
+  candidates <- case ghcVersionFile dflags of
+    Just path -> return [path]
+    Nothing -> (map (</> "ghcversion.h")) <$>
+               (getPackageIncludePath dflags [toInstalledUnitId rtsUnitId])
 
-  found <- filterM doesFileExist (map (</> "ghcversion.h") dirs)
+  found <- filterM doesFileExist candidates
   case found of
-      []    -> throwGhcExceptionIO (InstallationError ("ghcversion.h missing"))
+      []    -> throwGhcExceptionIO (InstallationError
+                                    ("ghcversion.h missing; tried: "
+                                      ++ intercalate ", " candidates))
       (x:_) -> return x
 
 -- Note [-fPIC for assembler]

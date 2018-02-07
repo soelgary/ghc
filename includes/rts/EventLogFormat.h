@@ -3,16 +3,16 @@
  * (c) The GHC Team, 2008-2009
  *
  * Event log format
- * 
+ *
  * The log format is designed to be extensible: old tools should be
  * able to parse (but not necessarily understand all of) new versions
  * of the format, and new tools will be able to understand old log
  * files.
- * 
+ *
  * Each event has a specific format.  If you add new events, give them
  * new numbers: we never re-use old event numbers.
  *
- * - The format is endian-independent: all values are represented in 
+ * - The format is endian-independent: all values are represented in
  *    bigendian order.
  *
  * - The format is extensible:
@@ -51,7 +51,7 @@
  *       Word8*         -- extra info (for future extensions)
  *       EVENT_ET_END
  *
- * Event : 
+ * Event :
  *       Word16         -- event_type
  *       Word64         -- time (nanosecs)
  *       [Word16]       -- length of the rest (for variable-sized events only)
@@ -154,7 +154,8 @@
 #define EVENT_GC_STATS_GHC        53 /* (heap_capset, generation,
                                          copied_bytes, slop_bytes, frag_bytes,
                                          par_n_threads,
-                                         par_max_copied, par_tot_copied) */
+                                         par_max_copied,
+                                         par_tot_copied, par_balanced_copied) */
 #define EVENT_GC_GLOBAL_SYNC      54 /* ()                     */
 #define EVENT_TASK_CREATE         55 /* (taskID, cap, tid)       */
 #define EVENT_TASK_MIGRATE        56 /* (taskID, cap, new_cap)   */
@@ -229,6 +230,19 @@
 #define CAPSET_TYPE_CUSTOM      1  /* reserved for end-user applications */
 #define CAPSET_TYPE_OSPROCESS   2  /* caps belong to the same OS process */
 #define CAPSET_TYPE_CLOCKDOMAIN 3  /* caps share a local clock/time      */
+
+/*
+ * Heap profile breakdown types. See EVENT_HEAP_PROF_BEGIN.
+ */
+typedef enum {
+    HEAP_PROF_BREAKDOWN_COST_CENTRE = 0x1,
+    HEAP_PROF_BREAKDOWN_MODULE,
+    HEAP_PROF_BREAKDOWN_CLOSURE_DESCR,
+    HEAP_PROF_BREAKDOWN_TYPE_DESCR,
+    HEAP_PROF_BREAKDOWN_RETAINER,
+    HEAP_PROF_BREAKDOWN_BIOGRAPHY,
+    HEAP_PROF_BREAKDOWN_CLOSURE_TYPE
+} HeapProfBreakdown;
 
 #if !defined(EVENTLOG_CONSTANTS_ONLY)
 

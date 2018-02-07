@@ -1,5 +1,5 @@
 /* ----------------------------------------------------------------------------
- * 
+ *
  * (c) The GHC Team, 1998-2005
  *
  * Closure Type Constants: out here because the native code generator
@@ -9,11 +9,13 @@
 
 #pragma once
 
-/* 
+/*
  * WARNING WARNING WARNING
  *
- * If you add or delete any closure types, don't forget to update
- * the closure flags table in rts/ClosureFlags.c.
+ * If you add or delete any closure types, don't forget to update the following,
+ *   - the closure flags table in rts/ClosureFlags.c
+ *   - isRetainer in rts/RetainerProfile.c
+ *   - the closure_type_names list in rts/Printer.c
  */
 
 /* Object tag 0 raises an internal error */

@@ -21,6 +21,8 @@ module RnExpr (
 
 #include "HsVersions.h"
 
+import GhcPrelude
+
 import RnBinds   ( rnLocalBindsAndThen, rnLocalValBindsLHS, rnLocalValBindsRHS,
                    rnMatchGroup, rnGRHS, makeMiniFixityEnv)
 import HsSyn
@@ -57,6 +59,7 @@ import qualified GHC.LanguageExtensions as LangExt
 
 import Data.Ord
 import Data.Array
+import qualified Data.List.NonEmpty as NE
 
 {-
 ************************************************************************
@@ -368,12 +371,22 @@ rnExpr e@(ELazyPat {}) = patSynErr e empty
 *                                                                      *
 ************************************************************************
 
-For the static form we check that the free variables are all top-level
-value bindings. This is done by checking that the name is external or
-wired-in. See the Notes about the NameSorts in Name.hs.
+For the static form we check that it is not used in splices.
+We also collect the free variables of the term which come from
+this module. See Note [Grand plan for static forms] in StaticPtrTable.
 -}
 
 rnExpr e@(HsStatic _ expr) = do
+    -- Normally, you wouldn't be able to construct a static expression without
+    -- first enabling -XStaticPointers in the first place, since that extension
+    -- is what makes the parser treat `static` as a keyword. But this is not a
+    -- sufficient safeguard, as one can construct static expressions by another
+    -- mechanism: Template Haskell (see #14204). To ensure that GHC is
+    -- absolutely prepared to cope with static forms, we check for
+    -- -XStaticPointers here as well.
+    unlessXOptM LangExt.StaticPointers $
+      addErr $ hang (text "Illegal static expression:" <+> ppr e)
+                  2 (text "Use StaticPointers to enable this extension")
     (expr',fvExpr) <- rnLExpr expr
     stage <- getStage
     case stage of
@@ -577,7 +590,7 @@ methodNamesMatch :: MatchGroup GhcRn (LHsCmd GhcRn) -> FreeVars
 methodNamesMatch (MG { mg_alts = L _ ms })
   = plusFVs (map do_one ms)
  where
-    do_one (L _ (Match _ _ _ grhss)) = methodNamesGRHSs grhss
+    do_one (L _ (Match { m_grhss = grhss })) = methodNamesGRHSs grhss
 
 -------------------------------------------------
 -- gaw 2004
@@ -719,7 +732,8 @@ postProcessStmtsForApplicativeDo ctxt stmts
        ; let is_do_expr | DoExpr <- ctxt = True
                         | otherwise = False
        ; if ado_is_on && is_do_expr
-            then rearrangeForApplicativeDo ctxt stmts
+            then do { traceRn "ppsfa" (ppr stmts)
+                    ; rearrangeForApplicativeDo ctxt stmts }
             else noPostProcessStmts ctxt stmts }
 
 -- | strip the FreeVars annotations from statements
@@ -970,7 +984,7 @@ rnParallelStmts ctxt return_op segs thing_inside
 
     cmpByOcc n1 n2 = nameOccName n1 `compare` nameOccName n2
     dupErr vs = addErr (text "Duplicate binding in parallel list comprehension for:"
-                    <+> quotes (ppr (head vs)))
+                    <+> quotes (ppr (NE.head vs)))
 
 lookupStmtName :: HsStmtContext Name -> Name -> RnM (SyntaxExpr GhcRn, FreeVars)
 -- Like lookupSyntaxName, but respects contexts
@@ -1512,6 +1526,7 @@ rearrangeForApplicativeDo ctxt stmts0 = do
   optimal_ado <- goptM Opt_OptimalApplicativeDo
   let stmt_tree | optimal_ado = mkStmtTreeOptimal stmts
                 | otherwise = mkStmtTreeHeuristic stmts
+  traceRn "rearrangeForADo" (ppr stmt_tree)
   return_name <- lookupSyntaxName' returnMName
   pure_name   <- lookupSyntaxName' pureAName
   let monad_names = MonadNames { return_name = return_name
@@ -1528,6 +1543,13 @@ data StmtTree a
   = StmtTreeOne a
   | StmtTreeBind (StmtTree a) (StmtTree a)
   | StmtTreeApplicative [StmtTree a]
+
+instance Outputable a => Outputable (StmtTree a) where
+  ppr (StmtTreeOne x)          = parens (text "StmtTreeOne" <+> ppr x)
+  ppr (StmtTreeBind x y)       = parens (hang (text "StmtTreeBind")
+                                            2 (sep [ppr x, ppr y]))
+  ppr (StmtTreeApplicative xs) = parens (hang (text "StmtTreeApplicative")
+                                            2 (vcat (map ppr xs)))
 
 flattenStmtTree :: StmtTree a -> [a]
 flattenStmtTree t = go t []
@@ -1635,13 +1657,14 @@ stmtTreeToStmts
 -- the bind form, which would give rise to a Monad constraint.
 stmtTreeToStmts monad_names ctxt (StmtTreeOne (L _ (BindStmt pat rhs _ _ _),_))
                 tail _tail_fvs
-  | isIrrefutableHsPat pat, (False,tail') <- needJoin monad_names tail
-    -- WARNING: isIrrefutableHsPat on (HsPat Name) doesn't have enough info
-    --          to know which types have only one constructor.  So only
-    --          tuples come out as irrefutable; other single-constructor
-    --          types, and newtypes, will not.  See the code for
-    --          isIrrefuatableHsPat
-  = mkApplicativeStmt ctxt [ApplicativeArgOne pat rhs] False tail'
+  | not (isStrictPattern pat), (False,tail') <- needJoin monad_names tail
+  -- See Note [ApplicativeDo and strict patterns]
+  = mkApplicativeStmt ctxt [ApplicativeArgOne pat rhs False] False tail'
+stmtTreeToStmts monad_names ctxt (StmtTreeOne (L _ (BodyStmt rhs _ _ _),_))
+                tail _tail_fvs
+  | (False,tail') <- needJoin monad_names tail
+  = mkApplicativeStmt ctxt
+      [ApplicativeArgOne nlWildPatName rhs True] False tail'
 
 stmtTreeToStmts _monad_names _ctxt (StmtTreeOne (s,_)) tail _tail_fvs =
   return (s : tail, emptyNameSet)
@@ -1660,7 +1683,9 @@ stmtTreeToStmts monad_names ctxt (StmtTreeApplicative trees) tail tail_fvs = do
    return (stmts, unionNameSets (fvs:fvss))
  where
    stmtTreeArg _ctxt _tail_fvs (StmtTreeOne (L _ (BindStmt pat exp _ _ _), _)) =
-     return (ApplicativeArgOne pat exp, emptyFVs)
+     return (ApplicativeArgOne pat exp False, emptyFVs)
+   stmtTreeArg _ctxt _tail_fvs (StmtTreeOne (L _ (BodyStmt exp _ _ _), _)) =
+     return (ApplicativeArgOne nlWildPatName exp True, emptyFVs)
    stmtTreeArg ctxt tail_fvs tree = do
      let stmts = flattenStmtTree tree
          pvarset = mkNameSet (concatMap (collectStmtBinders.unLoc.fst) stmts)
@@ -1715,6 +1740,8 @@ segments stmts = map fst $ merge $ reverse $ map reverse $ walk (reverse stmts)
     chunter _ [] = ([], [])
     chunter vars ((stmt,fvs) : rest)
        | not (isEmptyNameSet vars)
+       || isStrictPatternBind stmt
+           -- See Note [ApplicativeDo and strict patterns]
        = ((stmt,fvs) : chunk, rest')
        where (chunk,rest') = chunter vars' rest
              (pvars, evars) = stmtRefs stmt fvs
@@ -1726,6 +1753,59 @@ segments stmts = map fst $ merge $ reverse $ map reverse $ walk (reverse stmts)
       | otherwise      = (pvars, fvs')
       where fvs' = fvs `intersectNameSet` allvars
             pvars = mkNameSet (collectStmtBinders (unLoc stmt))
+
+    isStrictPatternBind :: ExprLStmt GhcRn -> Bool
+    isStrictPatternBind (L _ (BindStmt pat _ _ _ _)) = isStrictPattern pat
+    isStrictPatternBind _ = False
+
+{-
+Note [ApplicativeDo and strict patterns]
+
+A strict pattern match is really a dependency.  For example,
+
+do
+  (x,y) <- A
+  z <- B
+  return C
+
+The pattern (_,_) must be matched strictly before we do B.  If we
+allowed this to be transformed into
+
+  (\(x,y) -> \z -> C) <$> A <*> B
+
+then it could be lazier than the standard desuraging using >>=.  See #13875
+for more examples.
+
+Thus, whenever we have a strict pattern match, we treat it as a
+dependency between that statement and the following one.  The
+dependency prevents those two statements from being performed "in
+parallel" in an ApplicativeStmt, but doesn't otherwise affect what we
+can do with the rest of the statements in the same "do" expression.
+-}
+
+isStrictPattern :: LPat id -> Bool
+isStrictPattern (L _ pat) =
+  case pat of
+    WildPat{} -> False
+    VarPat{}  -> False
+    LazyPat{} -> False
+    AsPat _ p -> isStrictPattern p
+    ParPat p  -> isStrictPattern p
+    ViewPat _ p _ -> isStrictPattern p
+    SigPatIn p _ -> isStrictPattern p
+    SigPatOut p _ -> isStrictPattern p
+    BangPat{} -> True
+    ListPat{} -> True
+    TuplePat{} -> True
+    SumPat{} -> True
+    PArrPat{} -> True
+    ConPatIn{} -> True
+    ConPatOut{} -> True
+    LitPat{} -> True
+    NPat{} -> True
+    NPlusKPat{} -> True
+    SplicePat{} -> True
+    _otherwise -> panic "isStrictPattern"
 
 isLetStmt :: LStmt a b -> Bool
 isLetStmt (L _ LetStmt{}) = True
@@ -1760,9 +1840,12 @@ slurpIndependentStmts
 slurpIndependentStmts stmts = go [] [] emptyNameSet stmts
  where
   -- If we encounter a BindStmt that doesn't depend on a previous BindStmt
-  -- in this group, then add it to the group.
+  -- in this group, then add it to the group. We have to be careful about
+  -- strict patterns though; splitSegments expects that if we return Just
+  -- then we have actually done some splitting. Otherwise it will go into
+  -- an infinite loop (#14163).
   go lets indep bndrs ((L loc (BindStmt pat body bind_op fail_op ty), fvs) : rest)
-    | isEmptyNameSet (bndrs `intersectNameSet` fvs)
+    | isEmptyNameSet (bndrs `intersectNameSet` fvs) && not (isStrictPattern pat)
     = go lets ((L loc (BindStmt pat body bind_op fail_op ty), fvs) : indep)
          bndrs' rest
     where bndrs' = bndrs `unionNameSet` mkNameSet (collectPatBinders pat)
@@ -1929,7 +2012,7 @@ okStmt, okDoStmt, okCompStmt, okParStmt, okPArrStmt
    :: DynFlags -> HsStmtContext Name
    -> Stmt GhcPs (Located (body GhcPs)) -> Validity
 -- Return Nothing if OK, (Just extra) if not ok
--- The "extra" is an SDoc that is appended to an generic error message
+-- The "extra" is an SDoc that is appended to a generic error message
 
 okStmt dflags ctxt stmt
   = case ctxt of

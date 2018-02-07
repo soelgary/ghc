@@ -412,12 +412,14 @@ initEventLogging(const EventLogWriter *ev_writer)
         case EVENT_GC_STATS_GHC:      // (heap_capset, generation,
                                       //  copied_bytes, slop_bytes, frag_bytes,
                                       //  par_n_threads,
-                                      //  par_max_copied, par_tot_copied)
+                                      //  par_max_copied, par_tot_copied,
+                                      //  par_balanced_copied
+                                      //  )
             eventTypes[t].size = sizeof(EventCapsetID)
                                + sizeof(StgWord16)
                                + sizeof(StgWord64) * 3
                                + sizeof(StgWord32)
-                               + sizeof(StgWord64) * 2;
+                               + sizeof(StgWord64) * 3;
             break;
 
         case EVENT_TASK_CREATE:   // (taskId, cap, tid)
@@ -903,7 +905,8 @@ void postEventGcStats  (Capability    *cap,
                         W_           fragmentation,
                         uint32_t     par_n_threads,
                         W_           par_max_copied,
-                        W_           par_tot_copied)
+                        W_           par_tot_copied,
+                        W_           par_balanced_copied)
 {
     EventsBuf *eb = &capEventBuf[cap->no];
     ensureRoomForEvent(eb, EVENT_GC_STATS_GHC);
@@ -911,7 +914,8 @@ void postEventGcStats  (Capability    *cap,
     postEventHeader(eb, EVENT_GC_STATS_GHC);
     /* EVENT_GC_STATS_GHC (heap_capset, generation,
                            copied_bytes, slop_bytes, frag_bytes,
-                           par_n_threads, par_max_copied, par_tot_copied) */
+                           par_n_threads, par_max_copied,
+                           par_tot_copied, par_balanced_copied) */
     postCapsetID(eb, heap_capset);
     postWord16(eb, gen);
     postWord64(eb, copied);
@@ -920,6 +924,7 @@ void postEventGcStats  (Capability    *cap,
     postWord32(eb, par_n_threads);
     postWord64(eb, par_max_copied);
     postWord64(eb, par_tot_copied);
+    postWord64(eb, par_balanced_copied);
 }
 
 void postTaskCreateEvent (EventTaskId taskId,
@@ -1089,15 +1094,6 @@ void postBlockMarker (EventsBuf *eb)
     postCapNo(eb, eb->capno);
 }
 
-typedef enum {
-    HEAP_PROF_BREAKDOWN_COST_CENTRE = 0x1,
-    HEAP_PROF_BREAKDOWN_MODULE,
-    HEAP_PROF_BREAKDOWN_CLOSURE_DESCR,
-    HEAP_PROF_BREAKDOWN_TYPE_DESCR,
-    HEAP_PROF_BREAKDOWN_RETAINER,
-    HEAP_PROF_BREAKDOWN_BIOGRAPHY,
-} HeapProfBreakdown;
-
 static HeapProfBreakdown getHeapProfBreakdown(void)
 {
     switch (RtsFlags.ProfFlags.doHeapProfile) {
@@ -1113,6 +1109,8 @@ static HeapProfBreakdown getHeapProfBreakdown(void)
         return HEAP_PROF_BREAKDOWN_RETAINER;
     case HEAP_BY_LDV:
         return HEAP_PROF_BREAKDOWN_BIOGRAPHY;
+    case HEAP_BY_CLOSURE_TYPE:
+        return HEAP_PROF_BREAKDOWN_CLOSURE_TYPE;
     default:
         barf("getHeapProfBreakdown: unknown heap profiling mode");
     }

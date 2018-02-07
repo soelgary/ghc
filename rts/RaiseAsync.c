@@ -108,7 +108,7 @@ suspendComputation (Capability *cap, StgTSO *tso, StgUpdateFrame *stop_here)
      yourself using throwTo, the exception would actually immediately
      be delivered.  This is because throwTo itself is considered an
      interruptible point, so the exception is always deliverable. Thus,
-     ordinarily, we never end up with a message to onesself in the
+     ordinarily, we never end up with a message to oneself in the
      blocked_exceptions queue.
    
    - In the case of a StackOverflow, we don't actually care about the
@@ -873,6 +873,7 @@ raiseAsync(Capability *cap, StgTSO *tso, StgClosure *exception,
 
             ap->size = words;
             ap->fun  = (StgClosure *)sp[0];
+
             sp++;
             for(i=0; i < words; ++i) {
                 ap->payload[i] = (StgClosure *)*sp++;

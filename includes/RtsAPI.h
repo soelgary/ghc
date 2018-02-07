@@ -53,6 +53,8 @@ typedef struct CapabilityPublic_ {
 
 typedef enum {
     RtsOptsNone,         // +RTS causes an error
+    RtsOptsIgnore,       // Ignore command line arguments
+    RtsOptsIgnoreAll,    // Ignore command line and Environment arguments
     RtsOptsSafeOnly,     // safe RTS options allowed; others cause an error
     RtsOptsAll           // all RTS options allowed
   } RtsOptsEnabledEnum;
@@ -100,6 +102,10 @@ typedef struct {
 
     // Called for every GC
     void (* gcDoneHook) (const struct GCDetails_ *stats);
+
+    // Called when GC sync takes too long (+RTS --long-gc-sync=<time>)
+    void (* longGCSync) (uint32_t this_cap, Time time_ns);
+    void (* longGCSyncEnd) (Time time_ns);
 } RtsConfig;
 
 // Clients should start with defaultRtsConfig and then customise it.
@@ -135,6 +141,8 @@ typedef struct GCDetails_ {
   uint64_t copied_bytes;
     // In parallel GC, the max amount of data copied by any one thread
   uint64_t par_max_copied_bytes;
+  // In parallel GC, the amount of balanced data copied by all threads
+  uint64_t par_balanced_copied_bytes;
     // The time elapsed during synchronisation before GC
   Time sync_elapsed_ns;
     // The CPU time used during GC itself
@@ -176,6 +184,8 @@ typedef struct _RTSStats {
   uint64_t par_copied_bytes;
     // Sum of par_max_copied_bytes across all parallel GCs
   uint64_t cumulative_par_max_copied_bytes;
+  // Sum of par_balanced_copied_byes across all parallel GCs.
+  uint64_t cumulative_par_balanced_copied_bytes;
 
   // -----------------------------------
   // Cumulative stats about time use

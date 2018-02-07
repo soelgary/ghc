@@ -35,7 +35,7 @@ module HsTypes (
         SrcStrictness(..), SrcUnpackedness(..),
         getBangType, getBangStrictness,
 
-        ConDeclField(..), LConDeclField, pprConDeclFields, updateGadtResult,
+        ConDeclField(..), LConDeclField, pprConDeclFields,
 
         HsConDetails(..),
 
@@ -50,7 +50,7 @@ module HsTypes (
         mkHsImplicitBndrs, mkHsWildCardBndrs, hsImplicitBody,
         mkEmptyImplicitBndrs, mkEmptyWildCardBndrs,
         mkHsQTvs, hsQTvExplicit, emptyLHsQTvs, isEmptyLHsQTvs,
-        isHsKindedTyVar, hsTvbAllKinded,
+        isHsKindedTyVar, hsTvbAllKinded, isLHsForAllTy,
         hsScopedTvs, hsWcScopedTvs, dropWildCards,
         hsTyVarName, hsAllLTyVarNames, hsLTyVarLocNames,
         hsLTyVarName, hsLTyVarLocName, hsExplicitLTyVarNames,
@@ -59,14 +59,17 @@ module HsTypes (
         splitLHsForAllTy, splitLHsQualTy, splitLHsSigmaTy,
         splitHsFunType, splitHsAppsTy,
         splitHsAppTys, getAppsTyHead_maybe, hsTyGetAppHead_maybe,
-        mkHsOpTy, mkHsAppTy, mkHsAppTys,
+        mkHsOpTy, mkHsAppTy, mkHsAppTys, mkHsAppsTy,
         ignoreParens, hsSigType, hsSigWcType,
         hsLTyVarBndrToType, hsLTyVarBndrsToTypes,
 
         -- Printing
         pprHsType, pprHsForAll, pprHsForAllTvs, pprHsForAllExtra,
-        pprHsContext, pprHsContextNoArrow, pprHsContextMaybe
+        pprHsContext, pprHsContextNoArrow, pprHsContextMaybe,
+        isCompoundHsType, parenthesizeCompoundHsType
     ) where
+
+import GhcPrelude
 
 import {-# SOURCE #-} HsExpr ( HsSplice, pprSplice )
 
@@ -90,7 +93,6 @@ import Maybes( isJust )
 
 import Data.Data hiding ( Fixity, Prefix, Infix )
 import Data.Maybe ( fromMaybe )
-import Control.Monad ( unless )
 
 {-
 ************************************************************************
@@ -254,11 +256,16 @@ type LHsTyVarBndr pass = Located (HsTyVarBndr pass)
 -- | Located Haskell Quantified Type Variables
 data LHsQTyVars pass   -- See Note [HsType binders]
   = HsQTvs { hsq_implicit :: PostRn pass [Name]
-                                               -- implicit (dependent) variables
-           , hsq_explicit :: [LHsTyVarBndr pass]   -- explicit variables
-             -- See Note [HsForAllTy tyvar binders]
+                -- Implicit (dependent) variables
+
+           , hsq_explicit :: [LHsTyVarBndr pass]
+                -- Explicit variables, written by the user
+                -- See Note [HsForAllTy tyvar binders]
+
            , hsq_dependent :: PostRn pass NameSet
-               -- which explicit vars are dependent
+               -- Which members of hsq_explicit are dependent; that is,
+               -- mentioned in the kind of a later hsq_explicit,
+               -- or mentioned in a kind in the scope of this HsQTvs
                -- See Note [Dependent LHsQTyVars] in TcHsType
     }
 
@@ -280,12 +287,9 @@ isEmptyLHsQTvs _                = False
 
 ------------------------------------------------
 --            HsImplicitBndrs
--- Used to quantify the binders of a type in cases
--- when a HsForAll isn't appropriate:
+-- Used to quantify the implicit binders of a type
+--    * Implicit binders of a type signature (LHsSigType/LHsSigWcType)
 --    * Patterns in a type/data family instance (HsTyPats)
---    * Type of a rule binder (RuleBndr)
---    * Pattern type signatures (SigPatIn)
--- In the last of these, wildcards can happen, so we must accommodate them
 
 -- | Haskell Implicit Binders
 data HsImplicitBndrs pass thing   -- See Note [HsType binders]
@@ -780,30 +784,6 @@ instance (Outputable arg, Outputable rec)
   ppr (RecCon rec)     = text "RecCon:" <+> ppr rec
   ppr (InfixCon l r)   = text "InfixCon:" <+> ppr [l, r]
 
--- Takes details and result type of a GADT data constructor as created by the
--- parser and rejigs them using information about fixities from the renamer.
--- See Note [Sorting out the result type] in RdrHsSyn
-updateGadtResult
-  :: (Monad m)
-     => (SDoc -> m ())
-     -> SDoc
-     -> HsConDetails (LHsType GhcRn) (Located [LConDeclField GhcRn])
-                     -- ^ Original details
-     -> LHsType GhcRn -- ^ Original result type
-     -> m (HsConDetails (LHsType GhcRn) (Located [LConDeclField GhcRn]),
-           LHsType GhcRn)
-updateGadtResult failWith doc details ty
-  = do { let (arg_tys, res_ty) = splitHsFunType ty
-             badConSig         = text "Malformed constructor signature"
-       ; case details of
-           InfixCon {}  -> pprPanic "updateGadtResult" (ppr ty)
-
-           RecCon {}    -> do { unless (null arg_tys)
-                                       (failWith (doc <+> badConSig))
-                              ; return (details, res_ty) }
-
-           PrefixCon {} -> return (PrefixCon arg_tys, res_ty)}
-
 {-
 Note [ConDeclField passs]
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -912,9 +892,12 @@ sameWildCard :: Located (HsWildCardInfo pass)
 sameWildCard (L l1 (AnonWildCard _))   (L l2 (AnonWildCard _))   = l1 == l2
 
 ignoreParens :: LHsType pass -> LHsType pass
-ignoreParens (L _ (HsParTy ty))                      = ignoreParens ty
-ignoreParens (L _ (HsAppsTy [L _ (HsAppPrefix ty)])) = ignoreParens ty
-ignoreParens ty                                      = ty
+ignoreParens (L _ (HsParTy ty)) = ignoreParens ty
+ignoreParens ty                 = ty
+
+isLHsForAllTy :: LHsType p -> Bool
+isLHsForAllTy (L _ (HsForAllTy {})) = True
+isLHsForAllTy _                     = False
 
 {-
 ************************************************************************
@@ -931,11 +914,16 @@ mkHsOpTy :: LHsType pass -> Located (IdP pass) -> LHsType pass -> HsType pass
 mkHsOpTy ty1 op ty2 = HsOpTy ty1 op ty2
 
 mkHsAppTy :: LHsType pass -> LHsType pass -> LHsType pass
-mkHsAppTy t1 t2 = addCLoc t1 t2 (HsAppTy t1 t2)
+mkHsAppTy t1 t2 = addCLoc t1 t2 (HsAppTy t1 (parenthesizeCompoundHsType t2))
 
 mkHsAppTys :: LHsType pass -> [LHsType pass] -> LHsType pass
 mkHsAppTys = foldl mkHsAppTy
 
+mkHsAppsTy :: [LHsAppType GhcPs] -> HsType GhcPs
+-- In the common case of a singleton non-operator,
+-- avoid the clutter of wrapping in a HsAppsTy
+mkHsAppsTy [L _ (HsAppPrefix (L _ ty))] = ty
+mkHsAppsTy app_tys                      = HsAppsTy app_tys
 
 {-
 ************************************************************************
@@ -1049,11 +1037,13 @@ splitLHsSigmaTy ty
 
 splitLHsForAllTy :: LHsType pass -> ([LHsTyVarBndr pass], LHsType pass)
 splitLHsForAllTy (L _ (HsForAllTy { hst_bndrs = tvs, hst_body = body })) = (tvs, body)
-splitLHsForAllTy body                                                    = ([], body)
+splitLHsForAllTy (L _ (HsParTy t)) = splitLHsForAllTy t
+splitLHsForAllTy body              = ([], body)
 
 splitLHsQualTy :: LHsType pass -> (LHsContext pass, LHsType pass)
 splitLHsQualTy (L _ (HsQualTy { hst_ctxt = ctxt, hst_body = body })) = (ctxt,     body)
-splitLHsQualTy body                                                  = (noLoc [], body)
+splitLHsQualTy (L _ (HsParTy t)) = splitLHsQualTy t
+splitLHsQualTy body              = (noLoc [], body)
 
 splitLHsInstDeclTy :: LHsSigType GhcRn
                    -> ([Name], LHsContext GhcRn, LHsType GhcRn)
@@ -1123,10 +1113,7 @@ mkFieldOcc rdr = FieldOcc rdr PlaceHolder
 data AmbiguousFieldOcc pass
   = Unambiguous (Located RdrName) (PostRn pass (IdP pass))
   | Ambiguous   (Located RdrName) (PostTc pass (IdP pass))
-deriving instance ( Data pass
-                  , Data (PostTc pass (IdP pass))
-                  , Data (PostRn pass (IdP pass)))
-                  => Data (AmbiguousFieldOcc pass)
+deriving instance DataId pass => Data (AmbiguousFieldOcc pass)
 
 instance Outputable (AmbiguousFieldOcc pass) where
   ppr = ppr . rdrNameAmbiguousFieldOcc
@@ -1207,8 +1194,9 @@ pprHsForAllExtra extra qtvs cxt
 
 pprHsForAllTvs :: (SourceTextX pass, OutputableBndrId pass)
                => [LHsTyVarBndr pass] -> SDoc
-pprHsForAllTvs qtvs = sdocWithPprDebug $ \debug ->
-  ppWhen (debug || not (null qtvs)) $ forAllLit <+> interppSP qtvs <> dot
+pprHsForAllTvs qtvs
+  | null qtvs = whenPprDebug (forAllLit <+> dot)
+  | otherwise = forAllLit <+> interppSP qtvs <> dot
 
 pprHsContext :: (SourceTextX pass, OutputableBndrId pass)
              => HsContext pass -> SDoc
@@ -1361,3 +1349,22 @@ ppr_app_ty (HsAppPrefix ty) = ppr_mono_lty ty
 ppr_tylit :: HsTyLit -> SDoc
 ppr_tylit (HsNumTy _ i) = integer i
 ppr_tylit (HsStrTy _ s) = text (show s)
+
+
+-- | Return 'True' for compound types that will need parentheses when used in
+-- an argument position.
+isCompoundHsType :: LHsType pass -> Bool
+isCompoundHsType (L _ HsAppTy{} ) = True
+isCompoundHsType (L _ HsAppsTy{}) = True
+isCompoundHsType (L _ HsEqTy{}  ) = True
+isCompoundHsType (L _ HsFunTy{} ) = True
+isCompoundHsType (L _ HsOpTy{}  ) = True
+isCompoundHsType _                = False
+
+-- | @'parenthesizeCompoundHsType' ty@ checks if @'isCompoundHsType' ty@ is
+-- true, and if so, surrounds @ty@ with an 'HsParTy'. Otherwise, it simply
+-- returns @ty@.
+parenthesizeCompoundHsType :: LHsType pass -> LHsType pass
+parenthesizeCompoundHsType ty@(L loc _)
+  | isCompoundHsType ty = L loc (HsParTy ty)
+  | otherwise           = ty

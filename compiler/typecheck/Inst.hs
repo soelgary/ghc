@@ -12,10 +12,10 @@ The @Inst@ type: dictionaries or method instances
 module Inst (
        deeplySkolemise,
        topInstantiate, topInstantiateInferred, deeplyInstantiate,
-       instCall, instDFunType, instStupidTheta,
+       instCall, instDFunType, instStupidTheta, instTyVarsWith,
        newWanted, newWanteds,
 
-       tcInstBinders, tcInstBindersX, tcInstBinderX,
+       tcInstBinders, tcInstBinder,
 
        newOverloadedLit, mkOverLit,
 
@@ -32,8 +32,10 @@ module Inst (
 
 #include "HsVersions.h"
 
+import GhcPrelude
+
 import {-# SOURCE #-}   TcExpr( tcPolyExpr, tcSyntaxOp )
-import {-# SOURCE #-}   TcUnify( unifyType, unifyKind, noThing )
+import {-# SOURCE #-}   TcUnify( unifyType, unifyKind )
 
 import BasicTypes ( IntegralLit(..), SourceText(..) )
 import FastString
@@ -48,7 +50,7 @@ import CoreSyn     ( isOrphan )
 import FunDeps
 import TcMType
 import Type
-import TyCoRep     ( TyBinder(..) )
+import TyCoRep
 import TcType
 import HscTypes
 import Class( Class )
@@ -196,15 +198,16 @@ top_instantiate inst_all orig ty
        ; let inst_theta' = substTheta subst inst_theta
              sigma'      = substTy subst (mkForAllTys leave_bndrs $
                                           mkFunTys leave_theta rho)
+             inst_tv_tys' = mkTyVarTys inst_tvs'
 
-       ; wrap1 <- instCall orig (mkTyVarTys inst_tvs') inst_theta'
+       ; wrap1 <- instCall orig inst_tv_tys' inst_theta'
        ; traceTc "Instantiating"
                  (vcat [ text "all tyvars?" <+> ppr inst_all
                        , text "origin" <+> pprCtOrigin orig
-                       , text "type" <+> ppr ty
+                       , text "type" <+> debugPprType ty
                        , text "theta" <+> ppr theta
                        , text "leave_bndrs" <+> ppr leave_bndrs
-                       , text "with" <+> ppr inst_tvs'
+                       , text "with" <+> vcat (map debugPprType inst_tv_tys')
                        , text "theta:" <+>  ppr inst_theta' ])
 
        ; (wrap2, rho2) <-
@@ -254,8 +257,9 @@ deeply_instantiate :: CtOrigin
 deeply_instantiate orig subst ty
   | Just (arg_tys, tvs, theta, rho) <- tcDeepSplitSigmaTy_maybe ty
   = do { (subst', tvs') <- newMetaTyVarsX subst tvs
-       ; ids1  <- newSysLocalIds (fsLit "di") (substTys subst' arg_tys)
-       ; let theta' = substTheta subst' theta
+       ; let arg_tys' = substTys   subst' arg_tys
+             theta'   = substTheta subst' theta
+       ; ids1  <- newSysLocalIds (fsLit "di") arg_tys'
        ; wrap1 <- instCall orig (mkTyVarTys tvs') theta'
        ; traceTc "Instantiating (deeply)" (vcat [ text "origin" <+> pprCtOrigin orig
                                                 , text "type" <+> ppr ty
@@ -268,7 +272,7 @@ deeply_instantiate orig subst ty
                     <.> wrap2
                     <.> wrap1
                     <.> mkWpEvVarApps ids1,
-                 mkFunTys arg_tys rho2) }
+                 mkFunTys arg_tys' rho2) }
 
   | otherwise
   = do { let ty' = substTy subst ty
@@ -278,6 +282,32 @@ deeply_instantiate orig subst ty
                        , text "new type:" <+> ppr ty'
                        , text "subst:"    <+> ppr subst ])
       ; return (idHsWrapper, ty') }
+
+
+instTyVarsWith :: CtOrigin -> [TyVar] -> [TcType] -> TcM TCvSubst
+-- Use this when you want to instantiate (forall a b c. ty) with
+-- types [ta, tb, tc], but when the kinds of 'a' and 'ta' might
+-- not yet match (perhaps because there are unsolved constraints; Trac #14154)
+-- If they don't match, emit a kind-equality to promise that they will
+-- eventually do so, and thus make a kind-homongeneous substitution.
+instTyVarsWith orig tvs tys
+  = go empty_subst tvs tys
+  where
+    empty_subst = mkEmptyTCvSubst (mkInScopeSet (tyCoVarsOfTypes tys))
+
+    go subst [] []
+      = return subst
+    go subst (tv:tvs) (ty:tys)
+      | tv_kind `tcEqType` ty_kind
+      = go (extendTCvSubst subst tv ty) tvs tys
+      | otherwise
+      = do { co <- emitWantedEq orig KindLevel Nominal ty_kind tv_kind
+           ; go (extendTCvSubst subst tv (ty `mkCastTy` co)) tvs tys }
+      where
+        tv_kind = substTy subst (tyVarKind tv)
+        ty_kind = typeKind ty
+
+    go _ _ _ = pprPanic "instTysWith" (ppr tvs $$ ppr tys)
 
 {-
 ************************************************************************
@@ -324,14 +354,14 @@ instCallConstraints orig preds
   where
     go pred
      | Just (Nominal, ty1, ty2) <- getEqPredTys_maybe pred -- Try short-cut #1
-     = do  { co <- unifyType noThing ty1 ty2
-           ; return (EvCoercion co) }
+     = do  { co <- unifyType Nothing ty1 ty2
+           ; return (evCoercion co) }
 
        -- Try short-cut #2
      | Just (tc, args@[_, _, ty1, ty2]) <- splitTyConApp_maybe pred
      , tc `hasKey` heqTyConKey
-     = do { co <- unifyType noThing ty1 ty2
-          ; return (EvDFunApp (dataConWrapId heqDataCon) args [EvCoercion co]) }
+     = do { co <- unifyType Nothing ty1 ty2
+          ; return (evDFunApp (dataConWrapId heqDataCon) args [evCoercion co]) }
 
      | otherwise
      = emitWanted orig pred
@@ -378,26 +408,21 @@ instStupidTheta orig theta
 
 ---------------------------
 -- | This is used to instantiate binders when type-checking *types* only.
--- See also Note [Bidirectional type checking]
-tcInstBinders :: [TyBinder] -> TcM (TCvSubst, [TcType])
-tcInstBinders = tcInstBindersX emptyTCvSubst Nothing
-
--- | This is used to instantiate binders when type-checking *types* only.
 -- The @VarEnv Kind@ gives some known instantiations.
 -- See also Note [Bidirectional type checking]
-tcInstBindersX :: TCvSubst -> Maybe (VarEnv Kind)
+tcInstBinders :: TCvSubst -> Maybe (VarEnv Kind)
                -> [TyBinder] -> TcM (TCvSubst, [TcType])
-tcInstBindersX subst mb_kind_info bndrs
-  = do { (subst, args) <- mapAccumLM (tcInstBinderX mb_kind_info) subst bndrs
+tcInstBinders subst mb_kind_info bndrs
+  = do { (subst, args) <- mapAccumLM (tcInstBinder mb_kind_info) subst bndrs
        ; traceTc "instantiating tybinders:"
            (vcat $ zipWith (\bndr arg -> ppr bndr <+> text ":=" <+> ppr arg)
                            bndrs args)
        ; return (subst, args) }
 
 -- | Used only in *types*
-tcInstBinderX :: Maybe (VarEnv Kind)
+tcInstBinder :: Maybe (VarEnv Kind)
               -> TCvSubst -> TyBinder -> TcM (TCvSubst, TcType)
-tcInstBinderX mb_kind_info subst (Named (TvBndr tv _))
+tcInstBinder mb_kind_info subst (Named (TvBndr tv _))
   = case lookup_tv tv of
       Just ki -> return (extendTvSubstAndInScope subst tv ki, ki)
       Nothing -> do { (subst', tv') <- newMetaTyVarX subst tv
@@ -407,16 +432,17 @@ tcInstBinderX mb_kind_info subst (Named (TvBndr tv _))
                       ; lookupVarEnv env tv }
 
 
-tcInstBinderX _ subst (Anon ty)
+tcInstBinder _ subst (Anon ty)
      -- This is the *only* constraint currently handled in types.
   | Just (mk, role, k1, k2) <- get_pred_tys_maybe substed_ty
   = do { let origin = TypeEqOrigin { uo_actual   = k1
                                    , uo_expected = k2
-                                   , uo_thing    = Nothing }
+                                   , uo_thing    = Nothing
+                                   , uo_visible  = True }
        ; co <- case role of
-                 Nominal          -> unifyKind noThing k1 k2
+                 Nominal          -> unifyKind Nothing k1 k2
                  Representational -> emitWantedEq origin KindLevel role k1 k2
-                 Phantom          -> pprPanic "tcInstBinderX Phantom" (ppr ty)
+                 Phantom          -> pprPanic "tcInstBinder Phantom" (ppr ty)
        ; arg' <- mk co k1 k2
        ; return (subst, arg') }
 
@@ -681,9 +707,9 @@ newClsInst overlap_mode dfun_name tvs theta clas tys
 
        ; oflag <- getOverlapFlag overlap_mode
        ; let inst = mkLocalInstance dfun oflag tvs' clas tys'
-       ; warnIf (Reason Opt_WarnOrphans)
-                (isOrphan (is_orphan inst))
-                (instOrphWarn inst)
+       ; warnIfFlag Opt_WarnOrphans
+                    (isOrphan (is_orphan inst))
+                    (instOrphWarn inst)
        ; return inst }
 
 instOrphWarn :: ClsInst -> SDoc

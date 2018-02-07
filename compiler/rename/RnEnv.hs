@@ -17,10 +17,9 @@ module RnEnv (
         lookupGlobalOccRn, lookupGlobalOccRn_maybe,
         lookupOccRn_overloaded, lookupGlobalOccRn_overloaded, lookupExactOcc,
 
-        lookupSubBndrOcc_helper,
         ChildLookupResult(..),
-
-        combineChildLookupResult,
+        lookupSubBndrOcc_helper,
+        combineChildLookupResult, -- Called by lookupChildrenExport
 
         HsSigCtxt(..), lookupLocalTcNames, lookupSigOccRn,
         lookupSigCtxtOccRn,
@@ -45,6 +44,8 @@ module RnEnv (
 
 #include "HsVersions.h"
 
+import GhcPrelude
+
 import LoadIface        ( loadInterfaceForName, loadSrcInterface_maybe )
 import IfaceEnv
 import HsSyn
@@ -53,7 +54,7 @@ import HscTypes
 import TcEnv
 import TcRnMonad
 import RdrHsSyn         ( setRdrNameSpace )
-import TysWiredIn       ( starKindTyConName, unicodeStarKindTyConName )
+import TysWiredIn
 import Name
 import NameSet
 import NameEnv
@@ -62,8 +63,8 @@ import Module
 import ConLike
 import DataCon
 import TyCon
+import ErrUtils         ( MsgDoc )
 import PrelNames        ( rOOT_MAIN )
-import ErrUtils         ( MsgDoc, ErrMsg )
 import BasicTypes       ( pprWarningTxtForMsg, TopLevelFlag(..))
 import SrcLoc
 import Outputable
@@ -76,7 +77,8 @@ import ListSetOps       ( minusList )
 import qualified GHC.LanguageExtensions as LangExt
 import RnUnbound
 import RnUtils
-import Data.Functor (($>))
+import Data.Maybe (isJust)
+import qualified Data.Semigroup as Semi
 
 {-
 *********************************************************
@@ -192,7 +194,7 @@ newTopSrcBinder (L loc rdr_name)
   = do  { when (isQual rdr_name)
                  (addErrAt loc (badQualBndrErr rdr_name))
                 -- Binders should not be qualified; if they are, and with a different
-                -- module name, we we get a confusing "M.T is not in scope" error later
+                -- module name, we get a confusing "M.T is not in scope" error later
 
         ; stage <- getStage
         ; if isBrackStage stage then
@@ -583,32 +585,32 @@ instance Outputable DisambigInfo where
   ppr (DisambiguatedOccurrence gre) = text "DiambiguatedOccurrence:" <+> ppr gre
   ppr (AmbiguousOccurrence gres)    = text "Ambiguous:" <+> ppr gres
 
-instance Monoid DisambigInfo where
-  mempty = NoOccurrence
+instance Semi.Semigroup DisambigInfo where
   -- This is the key line: We prefer disambiguated occurrences to other
   -- names.
-  _ `mappend` DisambiguatedOccurrence g' = DisambiguatedOccurrence g'
-  DisambiguatedOccurrence g' `mappend` _ = DisambiguatedOccurrence g'
+  _ <> DisambiguatedOccurrence g' = DisambiguatedOccurrence g'
+  DisambiguatedOccurrence g' <> _ = DisambiguatedOccurrence g'
 
-
-  NoOccurrence `mappend` m = m
-  m `mappend` NoOccurrence = m
-  UniqueOccurrence g `mappend` UniqueOccurrence g'
+  NoOccurrence <> m = m
+  m <> NoOccurrence = m
+  UniqueOccurrence g <> UniqueOccurrence g'
     = AmbiguousOccurrence [g, g']
-  UniqueOccurrence g `mappend` AmbiguousOccurrence gs
+  UniqueOccurrence g <> AmbiguousOccurrence gs
     = AmbiguousOccurrence (g:gs)
-  AmbiguousOccurrence gs `mappend` UniqueOccurrence g'
+  AmbiguousOccurrence gs <> UniqueOccurrence g'
     = AmbiguousOccurrence (g':gs)
-  AmbiguousOccurrence gs `mappend` AmbiguousOccurrence gs'
+  AmbiguousOccurrence gs <> AmbiguousOccurrence gs'
     = AmbiguousOccurrence (gs ++ gs')
+
+instance Monoid DisambigInfo where
+  mempty = NoOccurrence
+  mappend = (Semi.<>)
+
 -- Lookup SubBndrOcc can never be ambiguous
 --
 -- Records the result of looking up a child.
 data ChildLookupResult
       = NameNotFound                --  We couldn't find a suitable name
-      | NameErr ErrMsg              --  We found an unambiguous name
-                                    --  but there's another error
-                                    --  we should abort from
       | IncorrectParent Name        -- Parent
                         Name        -- Name of thing we were looking for
                         SDoc        -- How to print the name
@@ -627,9 +629,8 @@ combineChildLookupResult (x:xs) = do
 
 instance Outputable ChildLookupResult where
   ppr NameNotFound = text "NameNotFound"
-  ppr (FoundName _p n) = text "Found:" <+> ppr n
+  ppr (FoundName p n) = text "Found:" <+> ppr p <+> ppr n
   ppr (FoundFL fls) = text "FoundFL:" <+> ppr fls
-  ppr (NameErr _) = text "Error"
   ppr (IncorrectParent p n td ns) = text "IncorrectParent"
                                   <+> hsep [ppr p, ppr n, td, ppr ns]
 
@@ -649,7 +650,6 @@ lookupSubBndrOcc warn_if_deprec the_parent doc rdr_name = do
     NameNotFound -> return (Left (unknownSubordinateErr doc rdr_name))
     FoundName _p n -> return (Right n)
     FoundFL fl  ->  return (Right (flSelector fl))
-    NameErr err ->  reportError err $> (Right $ mkUnboundNameRdr rdr_name)
     IncorrectParent {} -> return $ Left (unknownSubordinateErr doc rdr_name)
 
 
@@ -863,7 +863,15 @@ lookup_demoted rdr_name dflags
                                  (Reason Opt_WarnUntickedPromotedConstructors)
                                  (untickedPromConstrWarn demoted_name)
                              ; return demoted_name } }
-            else unboundNameX WL_Any rdr_name suggest_dk }
+            else do { -- We need to check if a data constructor of this name is
+                      -- in scope to give good error messages. However, we do
+                      -- not want to give an additional error if the data
+                      -- constructor happens to be out of scope! See #13947.
+                      mb_demoted_name <- discardErrs $
+                                         lookupOccRn_maybe demoted_rdr
+                    ; let suggestion | isJust mb_demoted_name = suggest_dk
+                                     | otherwise              = star_info
+                    ; unboundNameX WL_Any rdr_name suggestion } }
 
   | otherwise
   = reportUnboundName rdr_name
@@ -1240,7 +1248,7 @@ It is enabled by default and disabled by the flag
 
 Note [Safe Haskell and GHCi]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-We DONT do this Safe Haskell as we need to check imports. We can
+We DON'T do this Safe Haskell as we need to check imports. We can
 and should instead check the qualified import but at the moment
 this requires some refactoring so leave as a TODO
 -}
@@ -1564,5 +1572,17 @@ opDeclErr n
 
 badOrigBinding :: RdrName -> SDoc
 badOrigBinding name
-  = text "Illegal binding of built-in syntax:" <+> ppr (rdrNameOcc name)
-        -- The rdrNameOcc is because we don't want to print Prelude.(,)
+  | Just _ <- isBuiltInOcc_maybe occ
+  = text "Illegal binding of built-in syntax:" <+> ppr occ
+    -- Use an OccName here because we don't want to print Prelude.(,)
+  | otherwise
+  = text "Cannot redefine a Name retrieved by a Template Haskell quote:"
+    <+> ppr name
+    -- This can happen when one tries to use a Template Haskell splice to
+    -- define a top-level identifier with an already existing name, e.g.,
+    --
+    --   $(pure [ValD (VarP 'succ) (NormalB (ConE 'True)) []])
+    --
+    -- (See Trac #13968.)
+  where
+    occ = rdrNameOcc name

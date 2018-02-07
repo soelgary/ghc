@@ -1,7 +1,9 @@
-{-# LANGUAGE BangPatterns, CPP, RecordWildCards, GADTs #-}
+{-# LANGUAGE BangPatterns, RecordWildCards, GADTs #-}
 module CmmLayoutStack (
        cmmLayoutStack, setInfoTableStackMap
   ) where
+
+import GhcPrelude hiding ((<*>))
 
 import StgCmmUtils      ( callerSaveVolatileRegs ) -- XXX layering violation
 import StgCmmForeign    ( saveThreadState, loadThreadState ) -- XXX layering violation
@@ -17,7 +19,11 @@ import ForeignCall
 import CmmLive
 import CmmProcPoint
 import SMRep
-import Hoopl
+import Hoopl.Block
+import Hoopl.Collections
+import Hoopl.Dataflow
+import Hoopl.Graph
+import Hoopl.Label
 import UniqSupply
 import StgCmmUtils      ( newTemp )
 import Maybes
@@ -32,10 +38,6 @@ import Control.Monad.Fix
 import Data.Array as Array
 import Data.Bits
 import Data.List (nub)
-
-import Prelude hiding ((<*>))
-
-#include "HsVersions.h"
 
 {- Note [Stack Layout]
 

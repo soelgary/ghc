@@ -10,6 +10,8 @@
 module TcTypeable(mkTypeableBinds) where
 
 
+import GhcPrelude
+
 import BasicTypes ( Boxity(..), neverInlinePragma )
 import TcBinds( addTypecheckedBinds )
 import IfaceEnv( newGlobalBinder )
@@ -170,7 +172,7 @@ mkTypeableBinds
       | tc `elem` [runtimeRepTyCon, vecCountTyCon, vecElemTyCon]
       = False
       | otherwise =
-          (not (isFamInstTyCon tc) && isAlgTyCon tc)
+          isAlgTyCon tc
        || isDataFamilyTyCon tc
        || isClassTyCon tc
 
@@ -243,12 +245,12 @@ todoForTyCons mod mod_id tycons = do
                             }
             | tc     <- tycons
             , tc'    <- tc : tyConATs tc
-              -- If the tycon itself isn't typeable then we needn't look
-              -- at its promoted datacons as their kinds aren't Typeable
-            , Just _ <- pure $ tyConRepName_maybe tc'
               -- We need type representations for any associated types
             , let promoted = map promoteDataCon (tyConDataCons tc')
             , tc''   <- tc' : promoted
+              -- Don't make bindings for data-family instance tycons.
+              -- Do, however, make them for their promoted datacon (see #13915).
+            , not $ isFamInstTyCon tc''
             , Just rep_name <- pure $ tyConRepName_maybe tc''
             , typeIsTypeable $ dropForAlls $ tyConKind tc''
             ]
@@ -439,7 +441,7 @@ typeIsTypeable (TyConApp tc args)   = tyConIsTypeable tc
 typeIsTypeable (ForAllTy{})         = False
 typeIsTypeable (LitTy _)            = True
 typeIsTypeable (CastTy{})           = False
-typeIsTypeable (CoercionTy{})       = panic "typeIsTypeable(Coercion)"
+typeIsTypeable (CoercionTy{})       = False
 
 -- | Maps kinds to 'KindRep' bindings. This binding may either be defined in
 -- some other module (in which case the @Maybe (LHsExpr Id@ will be 'Nothing')
@@ -653,17 +655,20 @@ The TypeRep encoding of `Proxy Type Int` looks like this:
 
     $tcProxy :: GHC.Types.TyCon
     $trInt   :: TypeRep Int
-    $trType  :: TypeRep Type
+    TrType   :: TypeRep Type
 
     $trProxyType :: TypeRep (Proxy Type :: Type -> Type)
     $trProxyType = TrTyCon $tcProxy
-                           [$trType]  -- kind variable instantiation
+                           [TrType]  -- kind variable instantiation
+                           (tyConKind $tcProxy [TrType]) -- The TypeRep of
+                                                         -- Type -> Type
 
     $trProxy :: TypeRep (Proxy Type Int)
-    $trProxy = TrApp $trProxyType $trInt
+    $trProxy = TrApp $trProxyType $trInt TrType
 
     $tkProxy :: GHC.Types.KindRep
-    $tkProxy = KindRepFun (KindRepVar 0) (KindRepTyConApp $trType [])
+    $tkProxy = KindRepFun (KindRepVar 0)
+                          (KindRepTyConApp (KindRepTYPE LiftedRep) [])
 
 Note how $trProxyType cannot use 'TrApp', because TypeRep cannot represent
 polymorphic types.  So instead
@@ -677,9 +682,10 @@ polymorphic types.  So instead
        Proxy :: forall k. k->Type
 
  * A KindRep is just a recipe that we can instantiate with the
-   argument kinds, using Data.Typeable.Internal.instantiateKindRep.
+   argument kinds, using Data.Typeable.Internal.tyConKind and
+   store in the relevant 'TypeRep' constructor.
 
-   Data.Typeable.Internal.typeRepKind uses instantiateKindRep
+   Data.Typeable.Internal.typeRepKind looks up the stored kinds.
 
  * In a KindRep, the kind variables are represented by 0-indexed
    de Bruijn numbers:

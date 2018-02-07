@@ -21,12 +21,16 @@ module MkGraph
   )
 where
 
+import GhcPrelude (($),Int,Bool,Eq(..)) -- avoid importing (<*>)
+
 import BlockId
 import Cmm
 import CmmCallConv
 import CmmSwitch (SwitchTargets)
 
-import Compiler.Hoopl hiding (Unique, (<*>), mkFirst, mkMiddle, mkLast, mkLabel, mkBranch, Shape(..))
+import Hoopl.Block
+import Hoopl.Graph
+import Hoopl.Label
 import DynFlags
 import FastString
 import ForeignCall
@@ -37,9 +41,6 @@ import UniqSupply
 import Control.Monad
 import Data.List
 import Data.Maybe
-import Prelude (($),Int,Bool,Eq(..)) -- avoid importing (<*>)
-
-#include "HsVersions.h"
 
 
 -----------------------------------------------------------------------------

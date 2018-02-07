@@ -28,6 +28,7 @@
 #include "Sparks.h"
 #include "Sweep.h"
 
+#include "Arena.h"
 #include "Storage.h"
 #include "RtsUtils.h"
 #include "Apply.h"
@@ -48,6 +49,11 @@
 #include "Stable.h"
 #include "CheckUnload.h"
 #include "CNF.h"
+#include "RtsFlags.h"
+
+#if defined(PROFILING)
+#include "RetainerProfile.h"
+#endif
 
 #include <string.h> // for memset()
 #include <unistd.h>
@@ -132,6 +138,10 @@ uint32_t n_gc_threads;
 // For stats:
 static long copied;        // *words* copied & scavenged during this GC
 
+#if defined(PROF_SPIN) && defined(THREADED_RTS)
+volatile StgWord64 whitehole_gc_spin = 0;
+#endif
+
 bool work_stealing;
 
 uint32_t static_flag = STATIC_FLAG_B;
@@ -188,7 +198,7 @@ GarbageCollect (uint32_t collect_gen,
 {
   bdescr *bd;
   generation *gen;
-  StgWord live_blocks, live_words, par_max_copied;
+  StgWord live_blocks, live_words, par_max_copied, par_balanced_copied;
 #if defined(THREADED_RTS)
   gc_thread *saved_gct;
 #endif
@@ -460,8 +470,14 @@ GarbageCollect (uint32_t collect_gen,
 
   copied = 0;
   par_max_copied = 0;
+  par_balanced_copied = 0;
   {
       uint32_t i;
+      uint64_t par_balanced_copied_acc = 0;
+
+      for (i=0; i < n_gc_threads; i++) {
+          copied += gc_threads[i]->copied;
+      }
       for (i=0; i < n_gc_threads; i++) {
           if (n_gc_threads > 1) {
               debugTrace(DEBUG_gc,"thread %d:", i);
@@ -471,11 +487,20 @@ GarbageCollect (uint32_t collect_gen,
               debugTrace(DEBUG_gc,"   no_work          %ld", gc_threads[i]->no_work);
               debugTrace(DEBUG_gc,"   scav_find_work %ld",   gc_threads[i]->scav_find_work);
           }
-          copied += gc_threads[i]->copied;
           par_max_copied = stg_max(gc_threads[i]->copied, par_max_copied);
+          par_balanced_copied_acc +=
+            stg_min(n_gc_threads * gc_threads[i]->copied, copied);
       }
       if (n_gc_threads == 1) {
           par_max_copied = 0;
+          par_balanced_copied = 0;
+      }
+      else
+      {
+          // See Note [Work Balance] for an explanation of this computation
+          par_balanced_copied =
+              (par_balanced_copied_acc - copied + (n_gc_threads - 1) / 2) /
+              (n_gc_threads - 1);
       }
   }
 
@@ -736,24 +761,51 @@ GarbageCollect (uint32_t collect_gen,
   ACQUIRE_SM_LOCK;
 
   if (major_gc) {
-      W_ need, got;
-      need = BLOCKS_TO_MBLOCKS(n_alloc_blocks);
-      got = mblocks_allocated;
+      W_ need_prealloc, need_live, need, got;
+      uint32_t i;
+
+      need_live = 0;
+      for (i = 0; i < RtsFlags.GcFlags.generations; i++) {
+          need_live += genLiveBlocks(&generations[i]);
+      }
+      need_live = stg_max(RtsFlags.GcFlags.minOldGenSize, need_live);
+
+      need_prealloc = 0;
+      for (i = 0; i < n_nurseries; i++) {
+          need_prealloc += nurseries[i].n_blocks;
+      }
+      need_prealloc += RtsFlags.GcFlags.largeAllocLim;
+      need_prealloc += countAllocdBlocks(exec_block);
+      need_prealloc += arenaBlocks();
+#if defined(PROFILING)
+      if (RtsFlags.ProfFlags.doHeapProfile == HEAP_BY_RETAINER) {
+          need_prealloc = retainerStackBlocks();
+      }
+#endif
+
       /* If the amount of data remains constant, next major GC we'll
-         require (F+1)*need. We leave (F+2)*need in order to reduce
-         repeated deallocation and reallocation. */
-      need = (RtsFlags.GcFlags.oldGenFactor + 2) * need;
+       * require (F+1)*live + prealloc. We leave (F+2)*live + prealloc
+       * in order to reduce repeated deallocation and reallocation. #14702
+       */
+      need = need_prealloc + (RtsFlags.GcFlags.oldGenFactor + 2) * need_live;
+
+      /* Also, if user set heap size, do not drop below it.
+       */
+      need = stg_max(RtsFlags.GcFlags.heapSizeSuggestion, need);
+
       /* But with a large nursery, the above estimate might exceed
        * maxHeapSize.  A large resident set size might make the OS
        * kill this process, or swap unnecessarily.  Therefore we
        * ensure that our estimate does not exceed maxHeapSize.
        */
       if (RtsFlags.GcFlags.maxHeapSize != 0) {
-          W_ max = BLOCKS_TO_MBLOCKS(RtsFlags.GcFlags.maxHeapSize);
-          if (need > max) {
-              need = max;
-          }
+          need = stg_min(RtsFlags.GcFlags.maxHeapSize, need);
       }
+
+      need = BLOCKS_TO_MBLOCKS(need);
+
+      got = mblocks_allocated;
+
       if (got > need) {
           returnMemoryToOS(got - need);
       }
@@ -782,7 +834,7 @@ GarbageCollect (uint32_t collect_gen,
   // ok, GC over: tell the stats department what happened.
   stat_endGC(cap, gct, live_words, copied,
              live_blocks * BLOCK_SIZE_W - live_words /* slop */,
-             N, n_gc_threads, par_max_copied);
+             N, n_gc_threads, par_max_copied, par_balanced_copied);
 
 #if defined(RTS_USER_SIGNALS)
   if (RtsFlags.MiscFlags.install_signal_handlers) {
@@ -809,11 +861,6 @@ static void heapOverflow(void)
 /* -----------------------------------------------------------------------------
    Initialise the gc_thread structures.
    -------------------------------------------------------------------------- */
-
-#define GC_THREAD_INACTIVE             0
-#define GC_THREAD_STANDING_BY          1
-#define GC_THREAD_RUNNING              2
-#define GC_THREAD_WAITING_TO_CONTINUE  3
 
 static void
 new_gc_thread (uint32_t n, gc_thread *t)
@@ -1117,6 +1164,9 @@ waitForGcThreads (Capability *cap USED_IF_THREADS, bool idle_cap[])
     const uint32_t me = cap->no;
     uint32_t i, j;
     bool retry = true;
+    Time t0, t1, t2;
+
+    t0 = t1 = t2 = getProcessElapsedTime();
 
     while(retry) {
         for (i=0; i < n_threads; i++) {
@@ -1138,6 +1188,19 @@ waitForGcThreads (Capability *cap USED_IF_THREADS, bool idle_cap[])
             if (!retry) break;
             yieldThread();
         }
+
+        t2 = getProcessElapsedTime();
+        if (RtsFlags.GcFlags.longGCSync != 0 &&
+            t2 - t1 > RtsFlags.GcFlags.longGCSync) {
+            /* call this every longGCSync of delay */
+            rtsConfig.longGCSync(cap->no, t2 - t0);
+            t1 = t2;
+        }
+    }
+
+    if (RtsFlags.GcFlags.longGCSync != 0 &&
+        t2 - t0 > RtsFlags.GcFlags.longGCSync) {
+        rtsConfig.longGCSyncEnd(t2 - t0);
     }
 }
 
@@ -1309,7 +1372,7 @@ prepare_collected_gen (generation *gen)
         bdescr *bitmap_bdescr;
         StgWord *bitmap;
 
-        bitmap_size = gen->n_old_blocks * BLOCK_SIZE / (sizeof(W_)*BITS_PER_BYTE);
+        bitmap_size = gen->n_old_blocks * BLOCK_SIZE / BITS_IN(W_);
 
         if (bitmap_size > 0) {
             bitmap_bdescr = allocGroup((StgWord)BLOCK_ROUND_UP(bitmap_size)
@@ -1327,7 +1390,7 @@ prepare_collected_gen (generation *gen)
             // block descriptor.
             for (bd=gen->old_blocks; bd != NULL; bd = bd->link) {
                 bd->u.bitmap = bitmap;
-                bitmap += BLOCK_SIZE_W / (sizeof(W_)*BITS_PER_BYTE);
+                bitmap += BLOCK_SIZE_W / BITS_IN(W_);
 
                 // Also at this point we set the BF_MARKED flag
                 // for this block.  The invariant is that

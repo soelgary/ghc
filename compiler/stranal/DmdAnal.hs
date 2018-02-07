@@ -13,6 +13,8 @@ module DmdAnal ( dmdAnalProgram ) where
 
 #include "HsVersions.h"
 
+import GhcPrelude
+
 import DynFlags
 import WwLib            ( findTypeShape, deepSplitProductType_maybe )
 import Demand   -- All of it
@@ -399,7 +401,7 @@ situation actually arises in GHC.IO.Handle.Internals.wantReadableHandle
 
 So if the scrutinee is a primop call, we *don't* apply the
 state hack:
-  - If is a simple, terminating one like getMaskingState,
+  - If it is a simple, terminating one like getMaskingState,
     applying the hack is over-conservative.
   - If the primop is raise# then it returns bottom, so
     the case alternatives are already discarded.

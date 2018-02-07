@@ -19,9 +19,12 @@ module TcMatches ( tcMatchesFun, tcGRHS, tcGRHSsPat, tcMatchesCase, tcMatchLambd
                    tcDoStmt, tcGuardStmt
        ) where
 
+import GhcPrelude
+
 import {-# SOURCE #-}   TcExpr( tcSyntaxOp, tcInferSigmaNC, tcInferSigma
                               , tcCheckId, tcMonoExpr, tcMonoExprNC, tcPolyExpr )
 
+import BasicTypes (LexicalFixity(..))
 import HsSyn
 import TcRnMonad
 import TcEnv
@@ -98,7 +101,14 @@ tcMatchesFun fn@(L _ fun_name) matches exp_ty
     arity = matchGroupArity matches
     herald = text "The equation(s) for"
              <+> quotes (ppr fun_name) <+> text "have"
-    match_ctxt = MC { mc_what = mkPrefixFunRhs fn, mc_body = tcBody }
+    what = FunRhs { mc_fun = fn, mc_fixity = Prefix, mc_strictness = strictness }
+    match_ctxt = MC { mc_what = what, mc_body = tcBody }
+    strictness
+      | [L _ match] <- unLoc $ mg_alts matches
+      , FunRhs{ mc_strictness = SrcStrict } <- m_ctxt match
+      = SrcStrict
+      | otherwise
+      = NoSrcStrict
 
 {-
 @tcMatchesCase@ doesn't do the argument-count check because the
@@ -224,18 +234,13 @@ tcMatch :: (Outputable (body GhcRn)) => TcMatchCtxt body
 tcMatch ctxt pat_tys rhs_ty match
   = wrapLocM (tc_match ctxt pat_tys rhs_ty) match
   where
-    tc_match ctxt pat_tys rhs_ty match@(Match _ pats maybe_rhs_sig grhss)
+    tc_match ctxt pat_tys rhs_ty
+             match@(Match { m_pats = pats, m_grhss = grhss })
       = add_match_ctxt match $
         do { (pats', grhss') <- tcPats (mc_what ctxt) pats pat_tys $
-                                tc_grhss ctxt maybe_rhs_sig grhss rhs_ty
-           ; return (Match (mc_what ctxt) pats' Nothing grhss') }
-
-    tc_grhss ctxt Nothing grhss rhs_ty
-      = tcGRHSs ctxt grhss rhs_ty       -- No result signature
-
-        -- Result type sigs are no longer supported
-    tc_grhss _ (Just {}) _ _
-      = panic "tc_ghrss"        -- Rejected by renamer
+                                tcGRHSs ctxt grhss rhs_ty
+           ; return (Match { m_ctxt = mc_what ctxt, m_pats = pats'
+                           , m_grhss = grhss' }) }
 
         -- For (\x -> e), tcExpr has already said "In the expression \x->e"
         -- so we don't want to add "In the lambda abstraction \x->e"
@@ -1050,13 +1055,13 @@ tcApplicativeStmts ctxt pairs rhs_ty thing_inside
     goArg :: (ApplicativeArg GhcRn GhcRn, Type, Type)
           -> TcM (ApplicativeArg GhcTcId GhcTcId)
 
-    goArg (ApplicativeArgOne pat rhs, pat_ty, exp_ty)
+    goArg (ApplicativeArgOne pat rhs isBody, pat_ty, exp_ty)
       = setSrcSpan (combineSrcSpans (getLoc pat) (getLoc rhs)) $
         addErrCtxt (pprStmtInCtxt ctxt (mkBindStmt pat rhs))   $
         do { rhs' <- tcMonoExprNC rhs (mkCheckExpType exp_ty)
            ; (pat', _) <- tcPat (StmtCtxt ctxt) pat (mkCheckExpType pat_ty) $
                           return ()
-           ; return (ApplicativeArgOne pat' rhs') }
+           ; return (ApplicativeArgOne pat' rhs' isBody) }
 
     goArg (ApplicativeArgMany stmts ret pat, pat_ty, exp_ty)
       = do { (stmts', (ret',pat')) <-
@@ -1070,7 +1075,7 @@ tcApplicativeStmts ctxt pairs rhs_ty thing_inside
            ; return (ApplicativeArgMany stmts' ret' pat') }
 
     get_arg_bndrs :: ApplicativeArg GhcTcId GhcTcId -> [Id]
-    get_arg_bndrs (ApplicativeArgOne pat _)    = collectPatBinders pat
+    get_arg_bndrs (ApplicativeArgOne pat _ _)  = collectPatBinders pat
     get_arg_bndrs (ApplicativeArgMany _ _ pat) = collectPatBinders pat
 
 
@@ -1127,4 +1132,4 @@ checkArgs fun (MG { mg_alts = L _ (match1:matches) })
     bad_matches = [m | m <- matches, args_in_match m /= n_args1]
 
     args_in_match :: LMatch GhcRn body -> Int
-    args_in_match (L _ (Match _ pats _ _)) = length pats
+    args_in_match (L _ (Match { m_pats = pats })) = length pats

@@ -29,14 +29,17 @@ module HsPat (
         mkPrefixConPat, mkCharLitPat, mkNilPat,
 
         looksLazyPatBind,
-        isBangedLPat, isBangedPatBind,
+        isBangedLPat,
         hsPatNeedsParens,
+        isCompoundPat, parenthesizeCompoundPat,
         isIrrefutableHsPat,
 
         collectEvVarsPats,
 
         pprParendLPat, pprConArgs
     ) where
+
+import GhcPrelude
 
 import {-# SOURCE #-} HsExpr            (SyntaxExpr, LHsExpr, HsSplice, pprLExpr, pprSplice)
 
@@ -146,7 +149,7 @@ data Pat p
 
   | SumPat      (LPat p)           -- Sum sub-pattern
                 ConTag             -- Alternative (one-based)
-                Arity              -- Arity
+                Arity              -- Arity (INVARIANT: ≥ 2)
                 (PostTc p [Type])  -- PlaceHolder before typechecker, filled in
                                    -- afterwards with the types of the
                                    -- alternative
@@ -495,7 +498,7 @@ instance (Outputable arg)
   ppr (HsRecFields { rec_flds = flds, rec_dotdot = Just n })
         = braces (fsep (punctuate comma (map ppr (take n flds) ++ [dotdot])))
         where
-          dotdot = text ".." <+> ifPprDebug (ppr (drop n flds))
+          dotdot = text ".." <+> whenPprDebug (ppr (drop n flds))
 
 instance (Outputable p, Outputable arg)
       => Outputable (HsRecField' p arg) where
@@ -558,10 +561,6 @@ patterns are treated specially, of course.
 The 1.3 report defines what ``irrefutable'' and ``failure-free'' patterns are.
 -}
 
-isBangedPatBind :: HsBind p -> Bool
-isBangedPatBind (PatBind {pat_lhs = pat}) = isBangedLPat pat
-isBangedPatBind _ = False
-
 isBangedLPat :: LPat p -> Bool
 isBangedLPat (L _ (ParPat p))   = isBangedLPat p
 isBangedLPat (L _ (BangPat {})) = True
@@ -577,8 +576,6 @@ looksLazyPatBind (PatBind { pat_lhs = p })
   = looksLazyLPat p
 looksLazyPatBind (AbsBinds { abs_binds = binds })
   = anyBag (looksLazyPatBind . unLoc) binds
-looksLazyPatBind (AbsBindsSig { abs_sig_bind = L _ bind })
-  = looksLazyPatBind bind
 looksLazyPatBind _
   = False
 
@@ -619,8 +616,9 @@ isIrrefutableHsPat pat
     go1 (SigPatIn pat _)    = go pat
     go1 (SigPatOut pat _)   = go pat
     go1 (TuplePat pats _ _) = all go pats
-    go1 (SumPat pat _ _  _) = go pat
-    go1 (ListPat {}) = False
+    go1 (SumPat _ _ _ _)    = False
+                    -- See Note [Unboxed sum patterns aren't irrefutable]
+    go1 (ListPat {})        = False
     go1 (PArrPat {})        = False     -- ?
 
     go1 (ConPatIn {})       = False     -- Conservative
@@ -632,16 +630,38 @@ isIrrefutableHsPat pat
     go1 (ConPatOut{ pat_con = L _ (PatSynCon _pat) })
         = False -- Conservative
 
-    go1 (LitPat {})    = False
-    go1 (NPat {})      = False
-    go1 (NPlusKPat {}) = False
+    go1 (LitPat {})         = False
+    go1 (NPat {})           = False
+    go1 (NPlusKPat {})      = False
 
-    -- Both should be gotten rid of by renamer before
-    -- isIrrefutablePat is called
-    go1 (SplicePat {})     = urk pat
+    -- We conservatively assume that no TH splices are irrefutable
+    -- since we cannot know until the splice is evaluated.
+    go1 (SplicePat {})      = False
 
-    urk pat = pprPanic "isIrrefutableHsPat:" (ppr pat)
+{- Note [Unboxed sum patterns aren't irrefutable]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Unlike unboxed tuples, unboxed sums are *not* irrefutable when used as
+patterns. A simple example that demonstrates this is from #14228:
 
+  pattern Just' x = (# x | #)
+  pattern Nothing' = (# | () #)
+
+  foo x = case x of
+    Nothing' -> putStrLn "nothing"
+    Just'    -> putStrLn "just"
+
+In foo, the pattern Nothing' (that is, (# x | #)) is certainly not irrefutable,
+as does not match an unboxed sum value of the same arity—namely, (# | y #)
+(covered by Just'). In fact, no unboxed sum pattern is irrefutable, since the
+minimum unboxed sum arity is 2.
+
+Failing to mark unboxed sum patterns as non-irrefutable would cause the Just'
+case in foo to be unreachable, as GHC would mistakenly believe that Nothing'
+is the only thing that could possibly be matched!
+-}
+
+-- | Returns 'True' if a pattern must be parenthesized in order to parse
+-- (e.g., the @(x :: Int)@ in @f (x :: Int) = x@).
 hsPatNeedsParens :: Pat a -> Bool
 hsPatNeedsParens (NPlusKPat {})      = True
 hsPatNeedsParens (SplicePat {})      = False
@@ -664,10 +684,62 @@ hsPatNeedsParens (PArrPat {})        = False
 hsPatNeedsParens (LitPat {})         = False
 hsPatNeedsParens (NPat {})           = False
 
+-- | Returns 'True' if a constructor pattern must be parenthesized in order
+-- to parse.
 conPatNeedsParens :: HsConDetails a b -> Bool
 conPatNeedsParens (PrefixCon {}) = False
 conPatNeedsParens (InfixCon {})  = True
 conPatNeedsParens (RecCon {})    = False
+
+-- | Returns 'True' for compound patterns that need parentheses when used in
+-- an argument position.
+--
+-- Note that this is different from 'hsPatNeedsParens', which only says if
+-- a pattern needs to be parenthesized to parse in /any/ position, whereas
+-- 'isCompountPat' says if a pattern needs to be parenthesized in an /argument/
+-- position. In other words, @'hsPatNeedsParens' x@ implies
+-- @'isCompoundPat' x@, but not necessarily the other way around.
+isCompoundPat :: Pat a -> Bool
+isCompoundPat (NPlusKPat {})       = True
+isCompoundPat (SplicePat {})       = False
+isCompoundPat (ConPatIn _ ds)      = isCompoundConPat ds
+isCompoundPat p@(ConPatOut {})     = isCompoundConPat (pat_args p)
+isCompoundPat (SigPatIn {})        = True
+isCompoundPat (SigPatOut {})       = True
+isCompoundPat (ViewPat {})         = True
+isCompoundPat (CoPat _ p _)        = isCompoundPat p
+isCompoundPat (WildPat {})         = False
+isCompoundPat (VarPat {})          = False
+isCompoundPat (LazyPat {})         = False
+isCompoundPat (BangPat {})         = False
+isCompoundPat (ParPat {})          = False
+isCompoundPat (AsPat {})           = False
+isCompoundPat (TuplePat {})        = False
+isCompoundPat (SumPat {})          = False
+isCompoundPat (ListPat {})         = False
+isCompoundPat (PArrPat {})         = False
+isCompoundPat (LitPat p)           = isCompoundHsLit p
+isCompoundPat (NPat (L _ p) _ _ _) = isCompoundHsOverLit p
+
+-- | Returns 'True' for compound constructor patterns that need parentheses
+-- when used in an argument position.
+--
+-- Note that this is different from 'conPatNeedsParens', which only says if
+-- a constructor pattern needs to be parenthesized to parse in /any/ position,
+-- whereas 'isCompountConPat' says if a pattern needs to be parenthesized in an
+-- /argument/ position. In other words, @'conPatNeedsParens' x@ implies
+-- @'isCompoundConPat' x@, but not necessarily the other way around.
+isCompoundConPat :: HsConDetails a b -> Bool
+isCompoundConPat (PrefixCon args) = not (null args)
+isCompoundConPat (InfixCon {})    = True
+isCompoundConPat (RecCon {})      = False
+
+-- | @'parenthesizeCompoundPat' p@ checks if @'isCompoundPat' p@ is true, and
+-- if so, surrounds @p@ with a 'ParPat'. Otherwise, it simply returns @p@.
+parenthesizeCompoundPat :: LPat p -> LPat p
+parenthesizeCompoundPat lp@(L loc p)
+  | isCompoundPat p = L loc (ParPat lp)
+  | otherwise       = lp
 
 {-
 % Collect all EvVars from all constructor patterns

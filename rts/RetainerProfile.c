@@ -33,6 +33,18 @@
 #include "Stable.h" /* markStableTables */
 #include "sm/Storage.h" // for END_OF_STATIC_LIST
 
+/* Note [What is a retainer?]
+   ~~~~~~~~~~~~~~~~~~~~~~~~~~
+The definition of what sorts of things are counted as retainers is a bit hard to
+pin down. Intuitively, we want to identify closures which will help the user
+identify memory leaks due to thunks. In practice we also end up lumping mutable
+objects in this group for reasons that have been lost to time.
+
+The definition of retainer is implemented in isRetainer(), defined later in this
+file.
+*/
+
+
 /*
   Note: what to change in order to plug-in a new retainer profiling scheme?
     (1) type retainer in ../includes/StgRetainerProf.h
@@ -267,7 +279,6 @@ isEmptyRetainerStack( void )
 /* -----------------------------------------------------------------------------
  * Returns size of stack
  * -------------------------------------------------------------------------- */
-#if defined(DEBUG)
 W_
 retainerStackBlocks( void )
 {
@@ -279,7 +290,6 @@ retainerStackBlocks( void )
 
     return res;
 }
-#endif
 
 /* -----------------------------------------------------------------------------
  * Returns true if stackTop is at the stack boundary of the current stack,
@@ -322,7 +332,7 @@ find_ptrs( stackPos *info )
  *  Initializes *info from SRT information stored in *infoTable.
  * -------------------------------------------------------------------------- */
 static INLINE void
-init_srt_fun( stackPos *info, StgFunInfoTable *infoTable )
+init_srt_fun( stackPos *info, const StgFunInfoTable *infoTable )
 {
     if (infoTable->i.srt_bitmap == (StgHalfWord)(-1)) {
         info->type = posTypeLargeSRT;
@@ -336,7 +346,7 @@ init_srt_fun( stackPos *info, StgFunInfoTable *infoTable )
 }
 
 static INLINE void
-init_srt_thunk( stackPos *info, StgThunkInfoTable *infoTable )
+init_srt_thunk( stackPos *info, const StgThunkInfoTable *infoTable )
 {
     if (infoTable->i.srt_bitmap == (StgHalfWord)(-1)) {
         info->type = posTypeLargeSRT;
@@ -1022,6 +1032,9 @@ isRetainer( StgClosure *c )
     case MUT_VAR_DIRTY:
     case MUT_ARR_PTRS_CLEAN:
     case MUT_ARR_PTRS_DIRTY:
+    case SMALL_MUT_ARR_PTRS_CLEAN:
+    case SMALL_MUT_ARR_PTRS_DIRTY:
+    case BLOCKING_QUEUE:
 
         // thunks are retainers.
     case THUNK:
@@ -1069,17 +1082,21 @@ isRetainer( StgClosure *c )
     // closures. See trac #3956 for a program that hit this error.
     case IND_STATIC:
     case BLACKHOLE:
+    case WHITEHOLE:
         // static objects
     case FUN_STATIC:
         // misc
     case PRIM:
     case BCO:
     case ARR_WORDS:
+    case COMPACT_NFDATA:
         // STM
     case TREC_CHUNK:
         // immutable arrays
     case MUT_ARR_PTRS_FROZEN:
     case MUT_ARR_PTRS_FROZEN0:
+    case SMALL_MUT_ARR_PTRS_FROZEN:
+    case SMALL_MUT_ARR_PTRS_FROZEN0:
         return false;
 
         //
@@ -1089,11 +1106,15 @@ isRetainer( StgClosure *c )
         // legal objects during retainer profiling.
     case UPDATE_FRAME:
     case CATCH_FRAME:
+    case CATCH_RETRY_FRAME:
+    case CATCH_STM_FRAME:
     case UNDERFLOW_FRAME:
+    case ATOMICALLY_FRAME:
     case STOP_FRAME:
     case RET_BCO:
     case RET_SMALL:
     case RET_BIG:
+    case RET_FUN:
         // other cases
     case IND:
     case INVALID_OBJECT:
@@ -1279,7 +1300,7 @@ retainStack( StgClosure *c, retainer c_child_r,
 {
     stackElement *oldStackBoundary;
     StgPtr p;
-    StgRetInfoTable *info;
+    const StgRetInfoTable *info;
     StgWord bitmap;
     uint32_t size;
 
@@ -1355,7 +1376,7 @@ retainStack( StgClosure *c, retainer c_child_r,
 
         case RET_FUN: {
             StgRetFun *ret_fun = (StgRetFun *)p;
-            StgFunInfoTable *fun_info;
+            const StgFunInfoTable *fun_info;
 
             retainClosure(ret_fun->fun, c, c_child_r);
             fun_info = get_fun_itbl(UNTAG_CONST_CLOSURE(ret_fun->fun));
@@ -1411,7 +1432,7 @@ retain_PAP_payload (StgClosure *pap,    /* NOT tagged */
 {
     StgPtr p;
     StgWord bitmap;
-    StgFunInfoTable *fun_info;
+    const StgFunInfoTable *fun_info;
 
     retainClosure(fun, pap, c_child_r);
     fun = UNTAG_CLOSURE(fun);
@@ -1669,10 +1690,10 @@ inner_loop:
     {
         StgTSO *tso = (StgTSO *)c;
 
-        retainClosure(tso->stackobj,           c, c_child_r);
-        retainClosure(tso->blocked_exceptions, c, c_child_r);
-        retainClosure(tso->bq,                 c, c_child_r);
-        retainClosure(tso->trec,               c, c_child_r);
+        retainClosure((StgClosure*) tso->stackobj,           c, c_child_r);
+        retainClosure((StgClosure*) tso->blocked_exceptions, c, c_child_r);
+        retainClosure((StgClosure*) tso->bq,                 c, c_child_r);
+        retainClosure((StgClosure*) tso->trec,               c, c_child_r);
         if (   tso->why_blocked == BlockedOnMVar
                || tso->why_blocked == BlockedOnMVarRead
                || tso->why_blocked == BlockedOnBlackHole
@@ -1755,11 +1776,11 @@ static void
 computeRetainerSet( void )
 {
     StgWeak *weak;
-    RetainerSet *rtl;
     uint32_t g, n;
     StgPtr ml;
     bdescr *bd;
 #if defined(DEBUG_RETAINER)
+    RetainerSet *rtl;
     RetainerSet tmpRetainerSet;
 #endif
 
@@ -1801,9 +1822,9 @@ computeRetainerSet( void )
             for (ml = bd->start; ml < bd->free; ml++) {
 
                 maybeInitRetainerSet((StgClosure *)*ml);
-                rtl = retainerSetOf((StgClosure *)*ml);
 
 #if defined(DEBUG_RETAINER)
+                rtl = retainerSetOf((StgClosure *)*ml);
                 if (rtl == NULL) {
                     // first visit to *ml
                     // This is a violation of the interface rule!

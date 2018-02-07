@@ -18,6 +18,8 @@ module DriverBkp (doBackpack) where
 
 #include "HsVersions.h"
 
+import GhcPrelude
+
 -- In a separate module because it hooks into the parser.
 import BkpSyn
 
@@ -288,7 +290,8 @@ buildUnit session cid insts lunit = do
         let hi_dir = expectJust (panic "hiDir Backpack") $ hiDir dflags
             export_mod ms = (ms_mod_name ms, ms_mod ms)
             -- Export everything!
-            mods = [ export_mod ms | ms <- mod_graph, ms_hsc_src ms == HsSrcFile ]
+            mods = [ export_mod ms | ms <- mgModSummaries mod_graph
+                                   , ms_hsc_src ms == HsSrcFile ]
 
         -- Compile relevant only
         hsc_env <- getSession
@@ -660,7 +663,7 @@ hsunitModuleGraph dflags unit = do
             else fmap Just $ summariseRequirement pn mod_name
 
     -- 3. Return the kaboodle
-    return (nodes ++ req_nodes)
+    return $ mkModuleGraph $ nodes ++ req_nodes
 
 summariseRequirement :: PackageName -> ModuleName -> BkpM ModSummary
 summariseRequirement pn mod_name = do

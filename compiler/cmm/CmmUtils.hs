@@ -56,13 +56,15 @@ module CmmUtils(
         ofBlockMap, toBlockMap, insertBlock,
         ofBlockList, toBlockList, bodyToBlockList,
         toBlockListEntryFirst, toBlockListEntryFirstFalseFallthrough,
-        foldGraphBlocks, mapGraphNodes, postorderDfs, mapGraphNodes1,
+        foldlGraphBlocks, mapGraphNodes, postorderDfs, mapGraphNodes1,
 
         -- * Ticks
         blockTicks
   ) where
 
 #include "HsVersions.h"
+
+import GhcPrelude
 
 import TyCon    ( PrimRep(..), PrimElemRep(..) )
 import RepType  ( UnaryType, SlotTy (..), typePrimRep1 )
@@ -79,7 +81,10 @@ import CodeGen.Platform
 import Data.Word
 import Data.Maybe
 import Data.Bits
-import Hoopl
+import Hoopl.Graph
+import Hoopl.Label
+import Hoopl.Block
+import Hoopl.Collections
 
 ---------------------------------------------------
 --
@@ -337,7 +342,6 @@ cmmEqWord dflags  e1 e2 = CmmMachOp (mo_wordEq dflags)  [e1, e2]
 cmmULtWord dflags e1 e2 = CmmMachOp (mo_wordULt dflags) [e1, e2]
 cmmUGeWord dflags e1 e2 = CmmMachOp (mo_wordUGe dflags) [e1, e2]
 cmmUGtWord dflags e1 e2 = CmmMachOp (mo_wordUGt dflags) [e1, e2]
---cmmShlWord dflags e1 e2 = CmmMachOp (mo_wordShl dflags) [e1, e2]
 cmmSLtWord dflags e1 e2 = CmmMachOp (mo_wordSLt dflags) [e1, e2]
 cmmUShrWord dflags e1 e2 = CmmMachOp (mo_wordUShr dflags) [e1, e2]
 cmmAddWord dflags e1 e2 = CmmMachOp (mo_wordAdd dflags) [e1, e2]
@@ -389,23 +393,20 @@ hasNoGlobalRegs _ = False
 ---------------------------------------------------
 
 -- Tag bits mask
---cmmTagBits = CmmLit (mkIntCLit tAG_BITS)
 cmmTagMask, cmmPointerMask :: DynFlags -> CmmExpr
 cmmTagMask dflags = mkIntExpr dflags (tAG_MASK dflags)
 cmmPointerMask dflags = mkIntExpr dflags (complement (tAG_MASK dflags))
 
 -- Used to untag a possibly tagged pointer
 -- A static label need not be untagged
-cmmUntag :: DynFlags -> CmmExpr -> CmmExpr
+cmmUntag, cmmIsTagged, cmmConstrTag1 :: DynFlags -> CmmExpr -> CmmExpr
 cmmUntag _ e@(CmmLit (CmmLabel _)) = e
 -- Default case
 cmmUntag dflags e = cmmAndWord dflags e (cmmPointerMask dflags)
 
 -- Test if a closure pointer is untagged
-cmmIsTagged :: DynFlags -> CmmExpr -> CmmExpr
 cmmIsTagged dflags e = cmmNeWord dflags (cmmAndWord dflags e (cmmTagMask dflags)) (zeroExpr dflags)
 
-cmmConstrTag1 :: DynFlags -> CmmExpr -> CmmExpr
 -- Get constructor tag, but one based.
 cmmConstrTag1 dflags e = cmmAndWord dflags e (cmmTagMask dflags)
 
@@ -551,8 +552,8 @@ mapGraphNodes1 :: (forall e x. CmmNode e x -> CmmNode e x) -> CmmGraph -> CmmGra
 mapGraphNodes1 f = modifyGraph (mapGraph f)
 
 
-foldGraphBlocks :: (CmmBlock -> a -> a) -> a -> CmmGraph -> a
-foldGraphBlocks k z g = mapFold k z $ toBlockMap g
+foldlGraphBlocks :: (a -> CmmBlock -> a) -> a -> CmmGraph -> a
+foldlGraphBlocks k z g = mapFoldl k z $ toBlockMap g
 
 postorderDfs :: CmmGraph -> [CmmBlock]
 postorderDfs g = {-# SCC "postorderDfs" #-} postorder_dfs_from (toBlockMap g) (g_entry g)

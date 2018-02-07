@@ -101,4 +101,9 @@ T1407:
 
 .PHONY: T13606
 T13606:
-	echo "main" | '$(TEST_HC)' $(TEST_HC_OPTS_INTERACTIVE) -lD3DCompiler T13606.hs
+	echo ":q" | '$(TEST_HC)' $(TEST_HC_OPTS_INTERACTIVE) -lgcc_s
+
+.PHONY: big-obj
+big-obj:
+	'$(TEST_CC)' -c -Wa,-mbig-obj big-obj-c.c -o big-obj-c.o
+	echo "main" | '$(TEST_HC)' $(TEST_HC_OPTS_INTERACTIVE) big-obj-c.o big-obj.hs

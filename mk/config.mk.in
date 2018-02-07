@@ -357,7 +357,8 @@ SplitObjs = $(if $(and $(filter YES,$(SupportsSplitObjs)),\
 # Set SplitSections=YES or NO in your build.mk to override the default.
 #
 # This is not supported on Darwin (where you can use subsections-via-symbols
-# instead) and Windows is not yet working. (See #11445 and related tickets.)
+# instead) and Windows is disabled until we figure the linking performance
+# issues related to BFD out. (See #11445, #12913 and related tickets.)
 OsSupportsSplitSections=$(if $(filter $(TargetOS_CPP),mingw32 darwin),NO,YES)
 SupportsSplitSections=$(if $(and $(filter YES,$(OsSupportsSplitSections)),\
                                    $(filter YES,$(LdIsGNULd))),YES,NO)
@@ -509,8 +510,6 @@ endif
 
 GHC_PACKAGE_DB_FLAG = @GHC_PACKAGE_DB_FLAG@
 
-SUPPORTS_THIS_UNIT_ID = @SUPPORTS_THIS_UNIT_ID@
-
 #-----------------------------------------------------------------------------
 # C compiler
 #
@@ -523,8 +522,6 @@ GccVersion            = @GccVersion@
 # TargetPlatformFull retains the string passed to configure so we have it in
 # the necessary format to pass to libffi's configure.
 TargetPlatformFull    = @TargetPlatformFull@
-GccLT34         = @GccLT34@
-GccLT44         = @GccLT44@
 GccLT46         = @GccLT46@
 GccIsClang      = @GccIsClang@
 
@@ -735,6 +732,7 @@ NM = @NmCmd@
 AR = @ArCmd@
 OBJDUMP = @ObjdumpCmd@
 
+CLANG = @ClangCmd@
 LLC = @LlcCmd@
 OPT = @OptCmd@
 
@@ -775,7 +773,7 @@ else ifeq "$(TARGETPLATFORM)" "arm-unknown-linux"
 # The hack of using `:` to disable stripping is implemented by ghc-cabal.
 STRIP_CMD      = :
 else
-STRIP_CMD      = strip
+STRIP_CMD      = @StripCmd@
 endif
 PATCH_CMD      = @PatchCmd@
 TAR_CMD        = @TarCmd@
@@ -890,7 +888,6 @@ ICONV_LIB_DIRS = @ICONV_LIB_DIRS@
 GMP_INCLUDE_DIRS = @GMP_INCLUDE_DIRS@
 GMP_LIB_DIRS = @GMP_LIB_DIRS@
 
-CURSES_INCLUDE_DIRS = @CURSES_INCLUDE_DIRS@
 CURSES_LIB_DIRS = @CURSES_LIB_DIRS@
 
 # See Note [Disable -O2 in unregisterised mode]

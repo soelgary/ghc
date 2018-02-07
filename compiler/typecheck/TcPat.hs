@@ -16,6 +16,8 @@ module TcPat ( tcLetPat, newLetBndr, LetBndrSpec(..)
 
 #include "HsVersions.h"
 
+import GhcPrelude
+
 import {-# SOURCE #-}   TcExpr( tcSyntaxOp, tcSyntaxOpGen, tcInferSigma )
 
 import HsSyn
@@ -348,7 +350,7 @@ tc_pat penv (LazyPat pat) pat_ty thing_inside
 
         -- Check that the expected pattern type is itself lifted
         ; pat_ty <- readExpType pat_ty
-        ; _ <- unifyType noThing (typeKind pat_ty) liftedTypeKind
+        ; _ <- unifyType Nothing (typeKind pat_ty) liftedTypeKind
 
         ; return (LazyPat pat', res) }
 
@@ -382,7 +384,7 @@ tc_pat penv (ViewPat expr pat _) overall_pat_ty thing_inside
         ; let expr_orig = lexprCtOrigin expr
               herald    = text "A view pattern expression expects"
         ; (expr_wrap1, [inf_arg_ty], inf_res_ty)
-            <- matchActualFunTys herald expr_orig (Just expr) 1 expr'_inferred
+            <- matchActualFunTys herald expr_orig (Just (unLoc expr)) 1 expr'_inferred
             -- expr_wrap1 :: expr'_inferred "->" (inf_arg_ty -> inf_res_ty)
 
          -- check that overall pattern is more polymorphic than arg type
@@ -406,8 +408,8 @@ tc_pat penv (ViewPat expr pat _) overall_pat_ty thing_inside
 tc_pat penv (SigPatIn pat sig_ty) pat_ty thing_inside
   = do  { (inner_ty, tv_binds, wcs, wrap) <- tcPatSig (inPatBind penv)
                                                             sig_ty pat_ty
-        ; (pat', res) <- tcExtendTyVarEnv2 wcs     $
-                         tcExtendTyVarEnv tv_binds $
+        ; (pat', res) <- tcExtendTyVarEnv2 wcs      $
+                         tcExtendTyVarEnv2 tv_binds $
                          tc_lpat pat (mkCheckExpType inner_ty) penv thing_inside
         ; pat_ty <- readExpType pat_ty
         ; return (mkHsWrapPat wrap (SigPatOut pat' inner_ty) pat_ty, res) }
@@ -736,8 +738,13 @@ tcDataConPat penv (L con_span con_name) data_con pat_ty arg_pats thing_inside
 
         ; let all_arg_tys = eqSpecPreds eq_spec ++ theta ++ arg_tys
         ; checkExistentials ex_tvs all_arg_tys penv
-        ; (tenv, ex_tvs') <- tcInstSuperSkolTyVarsX
-                               (zipTvSubst univ_tvs ctxt_res_tys) ex_tvs
+
+        ; tenv <- instTyVarsWith PatOrigin univ_tvs ctxt_res_tys
+                  -- NB: Do not use zipTvSubst!  See Trac #14154
+                  -- We want to create a well-kinded substitution, so
+                  -- that the instantiated type is well-kinded
+
+        ; (tenv, ex_tvs') <- tcInstSuperSkolTyVarsX tenv ex_tvs
                      -- Get location from monad, not from ex_tvs
 
         ; let -- pat_ty' = mkTyConApp tycon ctxt_res_tys
@@ -896,7 +903,7 @@ matchExpectedConTy (PE { pe_orig = orig }) data_tc exp_pat_ty
                                              ppr exp_pat_ty,
                                              ppr pat_ty,
                                              ppr pat_rho, ppr wrap])
-       ; co1 <- unifyType noThing (mkTyConApp fam_tc (substTys subst fam_args)) pat_rho
+       ; co1 <- unifyType Nothing (mkTyConApp fam_tc (substTys subst fam_args)) pat_rho
              -- co1 : T (ty1,ty2) ~N pat_rho
              -- could use tcSubType here... but it's the wrong way round
              -- for actual vs. expected in error messages.
@@ -950,7 +957,7 @@ tcConArgs :: ConLike -> [TcSigmaType]
 
 tcConArgs con_like arg_tys (PrefixCon arg_pats) penv thing_inside
   = do  { checkTc (con_arity == no_of_args)     -- Check correct arity
-                  (arityErr "constructor" con_like con_arity no_of_args)
+                  (arityErr (text "constructor") con_like con_arity no_of_args)
         ; let pats_w_tys = zipEqual "tcConArgs" arg_pats arg_tys
         ; (arg_pats', res) <- tcMultiple tcConArg pats_w_tys
                                               penv thing_inside
@@ -961,7 +968,7 @@ tcConArgs con_like arg_tys (PrefixCon arg_pats) penv thing_inside
 
 tcConArgs con_like arg_tys (InfixCon p1 p2) penv thing_inside
   = do  { checkTc (con_arity == 2)      -- Check correct arity
-                  (arityErr "constructor" con_like con_arity 2)
+                  (arityErr (text "constructor") con_like con_arity 2)
         ; let [arg_ty1,arg_ty2] = arg_tys       -- This can't fail after the arity check
         ; ([p1',p2'], res) <- tcMultiple tcConArg [(p1,arg_ty1),(p2,arg_ty2)]
                                               penv thing_inside
@@ -978,14 +985,15 @@ tcConArgs con_like arg_tys (RecCon (HsRecFields rpats dd)) penv thing_inside
     tc_field (L l (HsRecField (L loc (FieldOcc (L lr rdr) sel)) pat pun)) penv
                                                                     thing_inside
       = do { sel'   <- tcLookupId sel
-           ; pat_ty <- setSrcSpan loc $ find_field_ty (occNameFS $ rdrNameOcc rdr)
+           ; pat_ty <- setSrcSpan loc $ find_field_ty sel
+                                          (occNameFS $ rdrNameOcc rdr)
            ; (pat', res) <- tcConArg (pat, pat_ty) penv thing_inside
            ; return (L l (HsRecField (L loc (FieldOcc (L lr rdr) sel')) pat'
                                                                     pun), res) }
 
-    find_field_ty :: FieldLabelString -> TcM TcType
-    find_field_ty lbl
-        = case [ty | (fl, ty) <- field_tys, flLabel fl == lbl] of
+    find_field_ty :: Name -> FieldLabelString -> TcM TcType
+    find_field_ty sel lbl
+        = case [ty | (fl, ty) <- field_tys, flSelector fl == sel] of
 
                 -- No matching field; chances are this field label comes from some
                 -- other record type (or maybe none).  If this happens, just fail,

@@ -158,7 +158,7 @@ else:
    conc023_ways = normal
 
 test('conc023', [when(fast(), skip),
-                 reqlib('random'),
+                 reqlib('random'), multi_cpu_race,
                  conc023_ways], compile_and_run, [''])
 
 test('conc024', normal, compile_and_run, [''])
@@ -284,3 +284,5 @@ test('hs_try_putmvar003',
 
 # Check forkIO exception determinism under optimization
 test('T13330', normal, compile_and_run, ['-O'])
+test('T13916', [reqlib('vector'), reqlib('stm'), reqlib('async')],
+     compile_and_run, ['-O2'])

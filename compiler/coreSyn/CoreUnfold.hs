@@ -42,6 +42,8 @@ module CoreUnfold (
 
 #include "HsVersions.h"
 
+import GhcPrelude
+
 import DynFlags
 import CoreSyn
 import PprCore          ()      -- Instances
@@ -649,7 +651,7 @@ sizeExpr dflags bOMB_OUT_SIZE top_args expr
         -- Don't charge for args, so that wrappers look cheap
         -- (See comments about wrappers with Case)
         --
-        -- IMPORATANT: *do* charge 1 for the alternative, else we
+        -- IMPORTANT: *do* charge 1 for the alternative, else we
         -- find that giant case nests are treated as practically free
         -- A good example is Foreign.C.Error.errnoToIOError
 
@@ -943,7 +945,7 @@ In a function application (f a b)
 Code for manipulating sizes
 -}
 
--- | The size of an candidate expression for unfolding
+-- | The size of a candidate expression for unfolding
 data ExprSize
     = TooBig
     | SizeIs { _es_size_is  :: {-# UNPACK #-} !Int -- ^ Size found
@@ -1239,8 +1241,8 @@ tryUnfolding dflags id lone_variable
           = True
           | otherwise
           = case cont_info of
-              CaseCtxt   -> not (lone_variable && is_wf)  -- Note [Lone variables]
-              ValAppCtxt -> True                              -- Note [Cast then apply]
+              CaseCtxt   -> not (lone_variable && is_exp)  -- Note [Lone variables]
+              ValAppCtxt -> True                           -- Note [Cast then apply]
               RuleArgCtxt -> uf_arity > 0  -- See Note [Unfold info lazy contexts]
               DiscArgCtxt -> uf_arity > 0  --
               RhsCtxt     -> uf_arity > 0  --
@@ -1386,9 +1388,10 @@ because the latter is strict.
         s = "foo"
         f = \x -> ...(error s)...
 
-Fundamentally such contexts should not encourage inlining because the
+Fundamentally such contexts should not encourage inlining because, provided
+the RHS is "expandable" (see Note [exprIsExpandable] in CoreUtils) the
 context can ``see'' the unfolding of the variable (e.g. case or a
-RULE) so there's no gain.  If the thing is bound to a value.
+RULE) so there's no gain.
 
 However, watch out:
 

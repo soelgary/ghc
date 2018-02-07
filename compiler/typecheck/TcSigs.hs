@@ -25,6 +25,8 @@ module TcSigs(
 
 #include "HsVersions.h"
 
+import GhcPrelude
+
 import HsSyn
 import TcHsType
 import TcRnTypes
@@ -32,7 +34,7 @@ import TcRnMonad
 import TcType
 import TcMType
 import TcValidity ( checkValidType )
-import TcUnify( tcSkolemise, unifyType, noThing )
+import TcUnify( tcSkolemise, unifyType )
 import Inst( topInstantiate )
 import TcEnv( tcLookupId )
 import TcEvidence( HsWrapper, (<.>) )
@@ -287,57 +289,16 @@ Once we get to type checking, we decompose it into its parts, in tcPatSynSig.
 
 * Note that 'forall univ_tvs' and 'req_theta =>'
         and 'forall ex_tvs'   and 'prov_theta =>'
-  are all optional.  We gather the pieces at the the top of tcPatSynSig
+  are all optional.  We gather the pieces at the top of tcPatSynSig
 
 * Initially the implicitly-bound tyvars (added by the renamer) include both
   universal and existential vars.
 
 * After we kind-check the pieces and convert to Types, we do kind generalisation.
-
-Note [The pattern-synonym signature splitting rule]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Given a pattern signature, we must split
-     the kind-generalised variables, and
-     the implicitly-bound variables
-into universal and existential.  The rule is this
-(see discussion on Trac #11224):
-
-     The universal tyvars are the ones mentioned in
-          - univ_tvs: the user-specified (forall'd) universals
-          - req_theta
-          - res_ty
-     The existential tyvars are all the rest
-
-For example
-
-   pattern P :: () => b -> T a
-   pattern P x = ...
-
-Here 'a' is universal, and 'b' is existential.  But there is a wrinkle:
-how do we split the arg_tys from req_ty?  Consider
-
-   pattern Q :: () => b -> S c -> T a
-   pattern Q x = ...
-
-This is an odd example because Q has only one syntactic argument, and
-so presumably is defined by a view pattern matching a function.  But
-it can happen (Trac #11977, #12108).
-
-We don't know Q's arity from the pattern signature, so we have to wait
-until we see the pattern declaration itself before deciding res_ty is,
-and hence which variables are existential and which are universal.
-
-And that in turn is why TcPatSynInfo has a separate field,
-patsig_implicit_bndrs, to capture the implicitly bound type variables,
-because we don't yet know how to split them up.
-
-It's a slight compromise, because it means we don't really know the
-pattern synonym's real signature until we see its declaration.  So,
-for example, in hs-boot file, we may need to think what to do...
-(eg don't have any implicitly-bound variables).
 -}
 
 tcPatSynSig :: Name -> LHsSigType GhcRn -> TcM TcPatSynInfo
+-- See Note [Pattern synonym signatures]
 tcPatSynSig name sig_ty
   | HsIB { hsib_vars = implicit_hs_tvs
          , hsib_body = hs_ty }  <- sig_ty
@@ -444,12 +405,30 @@ tcInstSig sig@(PartialSig { psig_hs_ty = hs_ty
                           , sig_loc = loc })
   = setSrcSpan loc $  -- Set the binding site of the tyvars
     do { (wcs, wcx, tvs, theta, tau) <- tcHsPartialSigType ctxt hs_ty
+
+        -- Clone the quantified tyvars
+        -- Reason: we might have    f, g :: forall a. a -> _ -> a
+        --         and we want it to behave exactly as if there were
+        --         two separate signatures.  Cloning here seems like
+        --         the easiest way to do so, and is very similar to
+        --         the tcInstType in the CompleteSig case
+        -- See Trac #14643
+        ; (subst, tvs') <- instSkolTyCoVars mk_sig_tv tvs
+        ; let tv_prs = map tyVarName tvs `zip` tvs'
+
        ; return (TISI { sig_inst_sig   = sig
-                      , sig_inst_skols = map (\tv -> (tyVarName tv, tv)) tvs
+                      , sig_inst_skols = tv_prs
                       , sig_inst_wcs   = wcs
                       , sig_inst_wcx   = wcx
-                      , sig_inst_theta = theta
-                      , sig_inst_tau   = tau }) }
+                      , sig_inst_theta = substTys subst theta
+                      , sig_inst_tau   = substTy  subst tau
+                }) }
+  where
+    mk_sig_tv old_name kind
+      = do { uniq <- newUnique
+           ; newSigTyVar (setNameUnique old_name uniq) kind }
+      -- Why newSigTyVar?  See TcBinds
+      -- Note [Quantified variables in partial type signatures]
 
 
 {- Note [Pattern bindings and complete signatures]
@@ -540,7 +519,7 @@ addInlinePrags poly_id prags_for_me
 
     warn_multiple_inlines inl1@(L loc prag1) (inl2@(L _ prag2) : inls)
        | inlinePragmaActivation prag1 == inlinePragmaActivation prag2
-       , isEmptyInlineSpec (inlinePragmaSpec prag1)
+       , noUserInlineSpec (inlinePragmaSpec prag1)
        =    -- Tiresome: inl1 is put there by virtue of being in a hs-boot loop
             -- and inl2 is a user NOINLINE pragma; we don't want to complain
          warn_multiple_inlines inl2 inls
@@ -695,7 +674,7 @@ tcSpecPrag poly_id prag@(SpecSig fun_name hs_tys inl)
 -- However we want to use fun_name in the error message, since that is
 -- what the user wrote (Trac #8537)
   = addErrCtxt (spec_ctxt prag) $
-    do  { warnIf NoReason (not (isOverloadedTy poly_ty || isInlinePragma inl))
+    do  { warnIf (not (isOverloadedTy poly_ty || isInlinePragma inl))
                  (text "SPECIALISE pragma for non-overloaded function"
                   <+> quotes (ppr fun_name))
                   -- Note [SPECIALISE pragmas]
@@ -722,7 +701,7 @@ tcSpecWrapper ctxt poly_ty spec_ty
   = do { (sk_wrap, inst_wrap)
                <- tcSkolemise ctxt spec_ty $ \ _ spec_tau ->
                   do { (inst_wrap, tau) <- topInstantiate orig poly_ty
-                     ; _ <- unifyType noThing spec_tau tau
+                     ; _ <- unifyType Nothing spec_tau tau
                             -- Deliberately ignore the evidence
                             -- See Note [Handling SPECIALISE pragmas],
                             --   wrinkle (2)

@@ -10,7 +10,7 @@
  * STG execution, a pointer to the capabilitity is kept in a
  * register (BaseReg; actually it is a pointer to cap->r).
  *
- * Only in an THREADED_RTS build will there be multiple capabilities,
+ * Only in a THREADED_RTS build will there be multiple capabilities,
  * for non-threaded builds there is only one global capability, namely
  * MainCapability.
  *
@@ -362,7 +362,7 @@ void initCapabilities (void)
         }
         n_numa_nodes = logical;
         if (logical == 0) {
-            barf("%s: available NUMA node set is empty");
+            barf("available NUMA node set is empty");
         }
     }
 

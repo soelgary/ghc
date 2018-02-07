@@ -14,6 +14,8 @@ HsImpExp: Abstract syntax: imports, exports, interfaces
 
 module HsImpExp where
 
+import GhcPrelude
+
 import Module           ( ModuleName )
 import HsDoc            ( HsDocString )
 import OccName          ( HasOccName(..), isTcOcc, isSymOcc )
@@ -139,7 +141,7 @@ instance (OutputableBndrId pass) => Outputable (ImportDecl pass) where
 ************************************************************************
 -}
 
--- | A name in an import or export specfication which may have adornments. Used
+-- | A name in an import or export specification which may have adornments. Used
 -- primarily for accurate pretty printing of ParsedSource, and API Annotation
 -- placement.
 data IEWrappedName name

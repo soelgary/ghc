@@ -21,10 +21,12 @@ module RnBinds (
 
    -- Other bindings
    rnMethodBinds, renameSigs,
-   rnMatchGroup, rnGRHSs, rnGRHS,
+   rnMatchGroup, rnGRHSs, rnGRHS, rnSrcFixityDecl,
    makeMiniFixityEnv, MiniFixityEnv,
    HsSigCtxt(..)
    ) where
+
+import GhcPrelude
 
 import {-# SOURCE #-} RnExpr( rnLExpr, rnStmts )
 
@@ -47,18 +49,19 @@ import NameSet
 import RdrName          ( RdrName, rdrNameOcc )
 import SrcLoc
 import ListSetOps       ( findDupsEq )
-import BasicTypes       ( RecFlag(..), LexicalFixity(..) )
+import BasicTypes       ( RecFlag(..) )
 import Digraph          ( SCC(..) )
 import Bag
 import Util
 import Outputable
-import FastString
 import UniqSet
 import Maybes           ( orElse )
 import qualified GHC.LanguageExtensions as LangExt
 
 import Control.Monad
-import Data.List        ( partition, sort )
+import Data.Foldable      ( toList )
+import Data.List          ( partition, sort )
+import Data.List.NonEmpty ( NonEmpty(..) )
 
 {-
 -- ToDo: Put the annotations into the monad, so that they arrive in the proper
@@ -657,19 +660,19 @@ rnPatSynBind sig_fn bind@(PSB { psb_id = L l name
          -- so that the binding locations are reported
          -- from the left-hand side
             case details of
-               PrefixPatSyn vars ->
+               PrefixCon vars ->
                    do { checkDupRdrNames vars
                       ; names <- mapM lookupPatSynBndr vars
-                      ; return ( (pat', PrefixPatSyn names)
+                      ; return ( (pat', PrefixCon names)
                                , mkFVs (map unLoc names)) }
-               InfixPatSyn var1 var2 ->
+               InfixCon var1 var2 ->
                    do { checkDupRdrNames [var1, var2]
                       ; name1 <- lookupPatSynBndr var1
                       ; name2 <- lookupPatSynBndr var2
                       -- ; checkPrecMatch -- TODO
-                      ; return ( (pat', InfixPatSyn name1 name2)
+                      ; return ( (pat', InfixCon name1 name2)
                                , mkFVs (map unLoc [name1, name2])) }
-               RecordPatSyn vars ->
+               RecCon vars ->
                    do { checkDupRdrNames (map recordPatSynSelectorId vars)
                       ; let rnRecordPatSynField
                               (RecordPatSynField { recordPatSynSelectorId = visible
@@ -679,7 +682,7 @@ rnPatSynBind sig_fn bind@(PSB { psb_id = L l name
                                    ; return $ RecordPatSynField { recordPatSynSelectorId = visible'
                                                                 , recordPatSynPatVar = hidden' } }
                       ; names <- mapM rnRecordPatSynField  vars
-                      ; return ( (pat', RecordPatSyn names)
+                      ; return ( (pat', RecCon names)
                                , mkFVs (map (unLoc . recordPatSynPatVar) names)) }
 
         ; (dir', fvs2) <- case dir of
@@ -703,7 +706,7 @@ rnPatSynBind sig_fn bind@(PSB { psb_id = L l name
                           , psb_dir = dir'
                           , psb_fvs = fvs' }
               selector_names = case details' of
-                                 RecordPatSyn names ->
+                                 RecCon names ->
                                   map (unLoc . recordPatSynSelectorId) names
                                  _ -> []
 
@@ -938,7 +941,6 @@ renameSigs ctxt sigs
 -- Doesn't seem worth much trouble to sort this.
 
 renameSig :: HsSigCtxt -> Sig GhcPs -> RnM (Sig GhcRn, FreeVars)
--- FixitySig is renamed elsewhere.
 renameSig _ (IdSig x)
   = return (IdSig x, emptyFVs)    -- Actually this never occurs
 
@@ -985,9 +987,9 @@ renameSig ctxt sig@(InlineSig v s)
   = do  { new_v <- lookupSigOccRn ctxt sig v
         ; return (InlineSig new_v s, emptyFVs) }
 
-renameSig ctxt sig@(FixSig (FixitySig vs f))
-  = do  { new_vs <- mapM (lookupSigOccRn ctxt sig) vs
-        ; return (FixSig (FixitySig new_vs f), emptyFVs) }
+renameSig ctxt (FixSig fsig)
+  = do  { new_fsig <- rnSrcFixityDecl ctxt fsig
+        ; return (FixSig new_fsig, emptyFVs) }
 
 renameSig ctxt sig@(MinimalSig s (L l bf))
   = do new_bf <- traverse (lookupSigOccRn ctxt sig) bf
@@ -1091,7 +1093,7 @@ okHsSig ctxt (L _ sig)
      (CompleteMatchSig {}, _)              -> False
 
 -------------------
-findDupSigs :: [LSig GhcPs] -> [[(Located RdrName, Sig GhcPs)]]
+findDupSigs :: [LSig GhcPs] -> [NonEmpty (Located RdrName, Sig GhcPs)]
 -- Check for duplicates on RdrName version,
 -- because renamed version has unboundName for
 -- not-in-scope binders, which gives bogus dup-sig errors
@@ -1155,24 +1157,16 @@ rnMatch' :: Outputable (body GhcPs) => HsMatchContext Name
          -> (Located (body GhcPs) -> RnM (Located (body GhcRn), FreeVars))
          -> Match GhcPs (Located (body GhcPs))
          -> RnM (Match GhcRn (Located (body GhcRn)), FreeVars)
-rnMatch' ctxt rnBody match@(Match { m_ctxt = mf, m_pats = pats
-                                  , m_type = maybe_rhs_sig, m_grhss = grhss })
-  = do  {       -- Result type signatures are no longer supported
-          case maybe_rhs_sig of
-                Nothing -> return ()
-                Just (L loc ty) -> addErrAt loc (resSigErr match ty)
-
-        ; let fixity = if isInfixMatch match then Infix else Prefix
-               -- Now the main event
-               -- Note that there are no local fixity decls for matches
+rnMatch' ctxt rnBody (Match { m_ctxt = mf, m_pats = pats, m_grhss = grhss })
+  = do  { -- Note that there are no local fixity decls for matches
         ; rnPats ctxt pats      $ \ pats' -> do
         { (grhss', grhss_fvs) <- rnGRHSs ctxt rnBody grhss
-        ; let mf' = case (ctxt,mf) of
-                      (FunRhs (L _ funid) _,FunRhs (L lf _) _)
-                                            -> FunRhs (L lf funid) fixity
+        ; let mf' = case (ctxt, mf) of
+                      (FunRhs { mc_fun = L _ funid }, FunRhs { mc_fun = L lf _ })
+                                            -> mf { mc_fun = L lf funid }
                       _                     -> ctxt
         ; return (Match { m_ctxt = mf', m_pats = pats'
-                        , m_type = Nothing, m_grhss = grhss'}, grhss_fvs ) }}
+                        , m_grhss = grhss'}, grhss_fvs ) }}
 
 emptyCaseErr :: HsMatchContext Name -> SDoc
 emptyCaseErr ctxt = hang (text "Empty list of alternatives in" <+> pp_ctxt)
@@ -1182,15 +1176,6 @@ emptyCaseErr ctxt = hang (text "Empty list of alternatives in" <+> pp_ctxt)
                 CaseAlt    -> text "case expression"
                 LambdaExpr -> text "\\case expression"
                 _ -> text "(unexpected)" <+> pprMatchContextNoun ctxt
-
-
-resSigErr :: Outputable body
-          => Match GhcPs body -> HsType GhcPs -> SDoc
-resSigErr match ty
-   = vcat [ text "Illegal result type signature" <+> quotes (ppr ty)
-          , nest 2 $ ptext (sLit
-                 "Result signatures are no longer supported in pattern matches")
-          , pprMatchInCtxt match ]
 
 {-
 ************************************************************************
@@ -1237,6 +1222,38 @@ rnGRHS' ctxt rnBody (GRHS guards rhs)
     is_standard_guard _                        = False
 
 {-
+*********************************************************
+*                                                       *
+        Source-code fixity declarations
+*                                                       *
+*********************************************************
+-}
+
+rnSrcFixityDecl :: HsSigCtxt -> FixitySig GhcPs -> RnM (FixitySig GhcRn)
+-- Rename a fixity decl, so we can put
+-- the renamed decl in the renamed syntax tree
+-- Errors if the thing being fixed is not defined locally.
+rnSrcFixityDecl sig_ctxt = rn_decl
+  where
+    rn_decl :: FixitySig GhcPs -> RnM (FixitySig GhcRn)
+        -- GHC extension: look up both the tycon and data con
+        -- for con-like things; hence returning a list
+        -- If neither are in scope, report an error; otherwise
+        -- return a fixity sig for each (slightly odd)
+    rn_decl (FixitySig fnames fixity)
+      = do names <- concatMapM lookup_one fnames
+           return (FixitySig names fixity)
+
+    lookup_one :: Located RdrName -> RnM [Located Name]
+    lookup_one (L name_loc rdr_name)
+      = setSrcSpan name_loc $
+                    -- This lookup will fail if the name is not defined in the
+                    -- same binding group as this fixity declaration.
+        do names <- lookupLocalTcNames sig_ctxt what rdr_name
+           return [ L name_loc name | (_, name) <- names ]
+    what = text "fixity signature"
+
+{-
 ************************************************************************
 *                                                                      *
 \subsection{Error messages}
@@ -1244,16 +1261,17 @@ rnGRHS' ctxt rnBody (GRHS guards rhs)
 ************************************************************************
 -}
 
-dupSigDeclErr :: [(Located RdrName, Sig GhcPs)] -> RnM ()
-dupSigDeclErr pairs@((L loc name, sig) : _)
+dupSigDeclErr :: NonEmpty (Located RdrName, Sig GhcPs) -> RnM ()
+dupSigDeclErr pairs@((L loc name, sig) :| _)
   = addErrAt loc $
     vcat [ text "Duplicate" <+> what_it_is
            <> text "s for" <+> quotes (ppr name)
-         , text "at" <+> vcat (map ppr $ sort $ map (getLoc . fst) pairs) ]
+         , text "at" <+> vcat (map ppr $ sort
+                                       $ map (getLoc . fst)
+                                       $ toList pairs)
+         ]
   where
     what_it_is = hsSigDoc sig
-
-dupSigDeclErr [] = panic "dupSigDeclErr"
 
 misplacedSigErr :: LSig GhcRn -> RnM ()
 misplacedSigErr (L loc sig)

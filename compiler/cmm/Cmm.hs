@@ -26,17 +26,20 @@ module Cmm (
      module CmmExpr,
   ) where
 
+import GhcPrelude
+
 import CLabel
 import BlockId
 import CmmNode
 import SMRep
 import CmmExpr
-import Compiler.Hoopl
+import Hoopl.Block
+import Hoopl.Collections
+import Hoopl.Graph
+import Hoopl.Label
 import Outputable
 
 import Data.Word        ( Word8 )
-
-#include "HsVersions.h"
 
 -----------------------------------------------------------------------------
 --  Cmm, GenCmm

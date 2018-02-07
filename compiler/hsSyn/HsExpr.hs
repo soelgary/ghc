@@ -18,6 +18,8 @@ module HsExpr where
 #include "HsVersions.h"
 
 -- friends:
+import GhcPrelude
+
 import HsDecls
 import HsPat
 import HsLit
@@ -196,7 +198,8 @@ data UnboundVar
   deriving Data
 
 instance Outputable UnboundVar where
-    ppr = ppr . unboundVarOcc
+    ppr (OutOfScope occ _) = text "OutOfScope" <> parens (ppr occ)
+    ppr (TrueExprHole occ) = text "ExprHole"   <> parens (ppr occ)
 
 unboundVarOcc :: UnboundVar -> OccName
 unboundVarOcc (OutOfScope occ _) = occ
@@ -740,7 +743,7 @@ HsPar (and ParPat in patterns, HsParTy in types) is used as follows
     https://phabricator.haskell.org/rGHC499e43824bda967546ebf95ee33ec1f84a114a7c
 
   * ParPat and HsParTy are pretty printed as '( .. )' regardless of whether or
-    not they are strictly necssary. This should be addressed when #13238 is
+    not they are strictly necessary. This should be addressed when #13238 is
     completed, to be treated the same as HsPar.
 
 
@@ -880,6 +883,8 @@ ppr_expr (SectionL expr op)
   = case unLoc op of
       HsVar (L _ v)  -> pp_infixly v
       HsConLikeOut c -> pp_infixly (conLikeName c)
+      HsUnboundVar h@TrueExprHole{}
+                     -> pp_infixly (unboundVarOcc h)
       _              -> pp_prefixly
   where
     pp_expr = pprDebugParendExpr expr
@@ -892,6 +897,8 @@ ppr_expr (SectionR op expr)
   = case unLoc op of
       HsVar (L _ v)  -> pp_infixly v
       HsConLikeOut c -> pp_infixly (conLikeName c)
+      HsUnboundVar h@TrueExprHole{}
+                     -> pp_infixly (unboundVarOcc h)
       _              -> pp_prefixly
   where
     pp_expr = pprDebugParendExpr expr
@@ -1410,10 +1417,6 @@ data Match p body
         m_ctxt :: HsMatchContext (NameOrRdrName (IdP p)),
           -- See note [m_ctxt in Match]
         m_pats :: [LPat p], -- The patterns
-        m_type :: (Maybe (LHsType p)),
-                                 -- A type signature for the result of the match
-                                 -- Nothing after typechecking
-                                 -- NB: No longer supported
         m_grhss :: (GRHSs p body)
   }
 deriving instance (Data body,DataId p) => Data (Match p body)
@@ -1461,8 +1464,8 @@ Example infix function definition requiring individual API Annotations
 
 isInfixMatch :: Match id body -> Bool
 isInfixMatch match = case m_ctxt match of
-  FunRhs _ Infix -> True
-  _              -> False
+  FunRhs {mc_fixity = Infix} -> True
+  _                          -> False
 
 isEmptyMatchGroup :: MatchGroup id body -> Bool
 isEmptyMatchGroup (MG { mg_alts = ms }) = null $ unLoc ms
@@ -1484,7 +1487,7 @@ matchGroupArity (MG { mg_alts = alts })
   | otherwise        = panic "matchGroupArity"
 
 hsLMatchPats :: LMatch id body -> [LPat id]
-hsLMatchPats (L _ (Match _ pats _ _)) = pats
+hsLMatchPats (L _ (Match { m_pats = pats })) = pats
 
 -- | Guarded Right-Hand Sides
 --
@@ -1537,13 +1540,15 @@ pprMatch :: (SourceTextX idR, OutputableBndrId idR, Outputable body)
          => Match idR body -> SDoc
 pprMatch match
   = sep [ sep (herald : map (nest 2 . pprParendLPat) other_pats)
-        , nest 2 ppr_maybe_ty
         , nest 2 (pprGRHSs ctxt (m_grhss match)) ]
   where
     ctxt = m_ctxt match
     (herald, other_pats)
         = case ctxt of
-            FunRhs (L _ fun) fixity
+            FunRhs {mc_fun=L _ fun, mc_fixity=fixity, mc_strictness=strictness}
+                | strictness == SrcStrict -> ASSERT(null $ m_pats match)
+                                             (char '!'<>pprPrefixOcc fun, m_pats match)
+                        -- a strict variable binding
                 | fixity == Prefix -> (pprPrefixOcc fun, m_pats match)
                         -- f x y z = e
                         -- Not pprBndr; the AbsBinds will
@@ -1564,10 +1569,6 @@ pprMatch match
 
     (pat1:pats1) = m_pats match
     (pat2:pats2) = pats1
-    ppr_maybe_ty = case m_type match of
-                        Just ty -> dcolon <+> ppr ty
-                        Nothing -> empty
-
 
 pprGRHSs :: (SourceTextX idR, OutputableBndrId idR, Outputable body)
          => HsMatchContext idL -> GRHSs idR body -> SDoc
@@ -1780,13 +1781,18 @@ deriving instance (DataId idL, DataId idR) => Data (ParStmtBlock idL idR)
 
 -- | Applicative Argument
 data ApplicativeArg idL idR
-  = ApplicativeArgOne            -- pat <- expr (pat must be irrefutable)
-      (LPat idL)
+  = ApplicativeArgOne      -- A single statement (BindStmt or BodyStmt)
+      (LPat idL)           -- WildPat if it was a BodyStmt (see below)
       (LHsExpr idL)
-  | ApplicativeArgMany           -- do { stmts; return vars }
-      [ExprLStmt idL]            -- stmts
-      (HsExpr idL)               -- return (v1,..,vn), or just (v1,..,vn)
-      (LPat idL)                 -- (v1,...,vn)
+      Bool                 -- True <=> was a BodyStmt
+                           -- False <=> was a BindStmt
+                           -- See Note [Applicative BodyStmt]
+
+  | ApplicativeArgMany     -- do { stmts; return vars }
+      [ExprLStmt idL]      -- stmts
+      (HsExpr idL)         -- return (v1,..,vn), or just (v1,..,vn)
+      (LPat idL)           -- (v1,...,vn)
+
 deriving instance (DataId idL, DataId idR) => Data (ApplicativeArg idL idR)
 
 {-
@@ -1924,6 +1930,34 @@ Parallel statements require the 'Control.Monad.Zip.mzip' function:
 
 In any other context than 'MonadComp', the fields for most of these
 'SyntaxExpr's stay bottom.
+
+
+Note [Applicative BodyStmt]
+
+(#12143) For the purposes of ApplicativeDo, we treat any BodyStmt
+as if it was a BindStmt with a wildcard pattern.  For example,
+
+  do
+    x <- A
+    B
+    return x
+
+is transformed as if it were
+
+  do
+    x <- A
+    _ <- B
+    return x
+
+so it transforms to
+
+  (\(x,_) -> x) <$> A <*> B
+
+But we have to remember when we treat a BodyStmt like a BindStmt,
+because in error messages we want to emit the original syntax the user
+wrote, not our internal representation.  So ApplicativeArgOne has a
+Bool flag that is True when the original statement was a BodyStmt, so
+that we can pretty-print it correctly.
 -}
 
 instance (SourceTextX idL, OutputableBndrId idL)
@@ -1940,7 +1974,7 @@ pprStmt :: forall idL idR body . (SourceTextX idL, SourceTextX idR,
                                   Outputable body)
         => (StmtLR idL idR body) -> SDoc
 pprStmt (LastStmt expr ret_stripped _)
-  = ifPprDebug (text "[last]") <+>
+  = whenPprDebug (text "[last]") <+>
        (if ret_stripped then text "return" else empty) <+>
        ppr expr
 pprStmt (BindStmt pat expr _ _ _) = hsep [ppr pat, larrow, ppr expr]
@@ -1948,14 +1982,15 @@ pprStmt (LetStmt (L _ binds))     = hsep [text "let", pprBinds binds]
 pprStmt (BodyStmt expr _ _ _)     = ppr expr
 pprStmt (ParStmt stmtss _ _ _)    = sep (punctuate (text " | ") (map ppr stmtss))
 
-pprStmt (TransStmt { trS_stmts = stmts, trS_by = by, trS_using = using, trS_form = form })
+pprStmt (TransStmt { trS_stmts = stmts, trS_by = by
+                   , trS_using = using, trS_form = form })
   = sep $ punctuate comma (map ppr stmts ++ [pprTransStmt by using form])
 
 pprStmt (RecStmt { recS_stmts = segment, recS_rec_ids = rec_ids
                  , recS_later_ids = later_ids })
   = text "rec" <+>
     vcat [ ppr_do_stmts segment
-         , ifPprDebug (vcat [ text "rec_ids=" <> ppr rec_ids
+         , whenPprDebug (vcat [ text "rec_ids=" <> ppr rec_ids
                             , text "later_ids=" <> ppr later_ids])]
 
 pprStmt (ApplicativeStmt args mb_join _)
@@ -1976,7 +2011,11 @@ pprStmt (ApplicativeStmt args mb_join _)
    flattenStmt (L _ (ApplicativeStmt args _ _)) = concatMap flattenArg args
    flattenStmt stmt = [ppr stmt]
 
-   flattenArg (_, ApplicativeArgOne pat expr) =
+   flattenArg (_, ApplicativeArgOne pat expr isBody)
+     | isBody =  -- See Note [Applicative BodyStmt]
+     [ppr (BodyStmt expr noSyntaxExpr noSyntaxExpr (panic "pprStmt")
+             :: ExprStmt idL)]
+     | otherwise =
      [ppr (BindStmt pat expr noSyntaxExpr noSyntaxExpr (panic "pprStmt")
              :: ExprStmt idL)]
    flattenArg (_, ApplicativeArgMany stmts _ _) =
@@ -1990,7 +2029,11 @@ pprStmt (ApplicativeStmt args mb_join _)
           then ap_expr
           else text "join" <+> parens ap_expr
 
-   pp_arg (_, ApplicativeArgOne pat expr) =
+   pp_arg (_, ApplicativeArgOne pat expr isBody)
+     | isBody =  -- See Note [Applicative BodyStmt]
+     ppr (BodyStmt expr noSyntaxExpr noSyntaxExpr (panic "pprStmt")
+            :: ExprStmt idL)
+     | otherwise =
      ppr (BindStmt pat expr noSyntaxExpr noSyntaxExpr (panic "pprStmt")
             :: ExprStmt idL)
    pp_arg (_, ApplicativeArgMany stmts return pat) =
@@ -2003,7 +2046,7 @@ pprStmt (ApplicativeStmt args mb_join _)
 pprTransformStmt :: (SourceTextX p, OutputableBndrId p)
                  => [IdP p] -> LHsExpr p -> Maybe (LHsExpr p) -> SDoc
 pprTransformStmt bndrs using by
-  = sep [ text "then" <+> ifPprDebug (braces (ppr bndrs))
+  = sep [ text "then" <+> whenPprDebug (braces (ppr bndrs))
         , nest 2 (ppr using)
         , nest 2 (pprBy by)]
 
@@ -2259,14 +2302,14 @@ pprSplice (HsQuasiQuote n q _ s)      = ppr_quasi n q s
 pprSplice (HsSpliced _ thing)         = ppr thing
 
 ppr_quasi :: OutputableBndr p => p -> p -> FastString -> SDoc
-ppr_quasi n quoter quote = ifPprDebug (brackets (ppr n)) <>
+ppr_quasi n quoter quote = whenPprDebug (brackets (ppr n)) <>
                            char '[' <> ppr quoter <> vbar <>
                            ppr quote <> text "|]"
 
 ppr_splice :: (SourceTextX p, OutputableBndrId p)
            => SDoc -> (IdP p) -> LHsExpr p -> SDoc -> SDoc
 ppr_splice herald n e trail
-    = herald <> ifPprDebug (brackets (ppr n)) <> ppr e <> trail
+    = herald <> whenPprDebug (brackets (ppr n)) <> ppr e <> trail
 
 -- | Haskell Bracket
 data HsBracket p = ExpBr (LHsExpr p)    -- [|  expr  |]
@@ -2353,9 +2396,16 @@ pp_dotdot = text " .. "
 
 -- | Haskell Match Context
 --
--- Context of a Match
+-- Context of a pattern match. This is more subtle than it would seem. See Note
+-- [Varieties of pattern matches].
 data HsMatchContext id -- Not an extensible tag
-  = FunRhs (Located id) LexicalFixity -- ^Function binding for f, fixity
+  = FunRhs { mc_fun        :: Located id    -- ^ function binder of @f@
+           , mc_fixity     :: LexicalFixity -- ^ fixing of @f@
+           , mc_strictness :: SrcStrictness -- ^ was @f@ banged?
+                                            -- See Note [FunBind vs PatBind]
+           }
+                                -- ^A pattern matching on an argument of a
+                                -- function binding
   | LambdaExpr                  -- ^Patterns of a lambda
   | CaseAlt                     -- ^Patterns and guards on a case alternative
   | IfAlt                       -- ^Guards of a multi-way if alternative
@@ -2376,7 +2426,7 @@ data HsMatchContext id -- Not an extensible tag
 deriving instance (Data id) => Data (HsMatchContext id)
 
 instance OutputableBndr id => Outputable (HsMatchContext id) where
-  ppr (FunRhs (L _ id) fix) = text "FunRhs" <+> ppr id <+> ppr fix
+  ppr m@(FunRhs{})          = text "FunRhs" <+> ppr (mc_fun m) <+> ppr (mc_fixity m)
   ppr LambdaExpr            = text "LambdaExpr"
   ppr CaseAlt               = text "CaseAlt"
   ppr IfAlt                 = text "IfAlt"
@@ -2419,22 +2469,18 @@ isListCompExpr PArrComp          = True
 isListCompExpr MonadComp         = True
 isListCompExpr (ParStmtCtxt c)   = isListCompExpr c
 isListCompExpr (TransStmtCtxt c) = isListCompExpr c
-isListCompExpr _                 = False
-
-isMonadCompExpr :: HsStmtContext id -> Bool
-isMonadCompExpr MonadComp            = True
-isMonadCompExpr (ParStmtCtxt ctxt)   = isMonadCompExpr ctxt
-isMonadCompExpr (TransStmtCtxt ctxt) = isMonadCompExpr ctxt
-isMonadCompExpr _                    = False
+isListCompExpr _ = False
 
 -- | Should pattern match failure in a 'HsStmtContext' be desugared using
 -- 'MonadFail'?
 isMonadFailStmtContext :: HsStmtContext id -> Bool
-isMonadFailStmtContext MonadComp    = True
-isMonadFailStmtContext DoExpr       = True
-isMonadFailStmtContext MDoExpr      = True
-isMonadFailStmtContext GhciStmtCtxt = True
-isMonadFailStmtContext _            = False
+isMonadFailStmtContext MonadComp            = True
+isMonadFailStmtContext DoExpr               = True
+isMonadFailStmtContext MDoExpr              = True
+isMonadFailStmtContext GhciStmtCtxt         = True
+isMonadFailStmtContext (ParStmtCtxt ctxt)   = isMonadFailStmtContext ctxt
+isMonadFailStmtContext (TransStmtCtxt ctxt) = isMonadFailStmtContext ctxt
+isMonadFailStmtContext _ = False -- ListComp, PArrComp, PatGuard, ArrowExpr
 
 matchSeparator :: HsMatchContext id -> SDoc
 matchSeparator (FunRhs {})  = text "="
@@ -2462,7 +2508,8 @@ pprMatchContext ctxt
 
 pprMatchContextNoun :: (Outputable (NameOrRdrName id),Outputable id)
                     => HsMatchContext id -> SDoc
-pprMatchContextNoun (FunRhs (L _ fun) _) = text "equation for"
+pprMatchContextNoun (FunRhs {mc_fun=L _ fun})
+                                    = text "equation for"
                                       <+> quotes (ppr fun)
 pprMatchContextNoun CaseAlt         = text "case alternative"
 pprMatchContextNoun IfAlt           = text "multi-way if alternative"
@@ -2507,13 +2554,11 @@ pprStmtContext (PatGuard ctxt) = text "pattern guard for" $$ pprMatchContext ctx
 --          transformed branch of
 --          transformed branch of monad comprehension
 pprStmtContext (ParStmtCtxt c) =
-  sdocWithPprDebug $ \dbg -> if dbg
-    then sep [text "parallel branch of", pprAStmtContext c]
-    else pprStmtContext c
+  ifPprDebug (sep [text "parallel branch of", pprAStmtContext c])
+             (pprStmtContext c)
 pprStmtContext (TransStmtCtxt c) =
-  sdocWithPprDebug $ \dbg -> if dbg
-    then sep [text "transformed branch of", pprAStmtContext c]
-    else pprStmtContext c
+  ifPprDebug (sep [text "transformed branch of", pprAStmtContext c])
+             (pprStmtContext c)
 
 instance (Outputable p, Outputable (NameOrRdrName p))
       => Outputable (HsStmtContext p) where
@@ -2522,7 +2567,7 @@ instance (Outputable p, Outputable (NameOrRdrName p))
 -- Used to generate the string for a *runtime* error message
 matchContextErrString :: Outputable id
                       => HsMatchContext id -> SDoc
-matchContextErrString (FunRhs (L _ fun) _)       = text "function" <+> ppr fun
+matchContextErrString (FunRhs{mc_fun=L _ fun})   = text "function" <+> ppr fun
 matchContextErrString CaseAlt                    = text "case"
 matchContextErrString IfAlt                      = text "multi-way if"
 matchContextErrString PatBindRhs                 = text "pattern binding"

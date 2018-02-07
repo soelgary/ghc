@@ -37,8 +37,9 @@ module HsDecls (
   -- ** Instance declarations
   InstDecl(..), LInstDecl, NewOrData(..), FamilyInfo(..),
   TyFamInstDecl(..), LTyFamInstDecl, instDeclDataFamInsts,
-  DataFamInstDecl(..), LDataFamInstDecl, pprDataFamInstFlavour,
-  TyFamEqn(..), TyFamInstEqn, LTyFamInstEqn, TyFamDefltEqn, LTyFamDefltEqn,
+  DataFamInstDecl(..), LDataFamInstDecl, pprDataFamInstFlavour, pprFamInstLHS,
+  FamInstEqn, LFamInstEqn, FamEqn(..),
+  TyFamInstEqn, LTyFamInstEqn, TyFamDefltEqn, LTyFamDefltEqn,
   HsTyPats,
   LClsInstDecl, ClsInstDecl(..),
 
@@ -62,10 +63,8 @@ module HsDecls (
   CImportSpec(..),
   -- ** Data-constructor declarations
   ConDecl(..), LConDecl,
-  HsConDeclDetails, hsConDeclArgTys,
-  getConNames,
-  getConDetails,
-  gadtDeclDetails,
+  HsConDeclDetails, hsConDeclArgTys, hsConDeclTheta,
+  getConNames, getConArgs,
   -- ** Document comments
   DocDecl(..), LDocDecl, docDeclDoc,
   -- ** Deprecations
@@ -86,6 +85,8 @@ module HsDecls (
     ) where
 
 -- friends:
+import GhcPrelude
+
 import {-# SOURCE #-}   HsExpr( LHsExpr, HsExpr, HsSplice, pprExpr,
                                 pprSpliceDecl )
         -- Because Expr imports Decls via HsBracket
@@ -592,7 +593,7 @@ tyFamInstDeclName = unLoc . tyFamInstDeclLName
 
 tyFamInstDeclLName :: TyFamInstDecl pass -> Located (IdP pass)
 tyFamInstDeclLName (TyFamInstDecl { tfid_eqn =
-                     (L _ (TyFamEqn { tfe_tycon = ln })) })
+                     (HsIB { hsib_body = FamEqn { feqn_tycon = ln }}) })
   = ln
 
 tyClDeclLName :: TyClDecl pass -> Located (IdP pass)
@@ -692,6 +693,10 @@ pp_vanilla_decl_head thing (HsQTvs { hsq_explicit = tyvars }) fixity context
  = hsep [pprHsContext context, pp_tyvars tyvars]
   where
     pp_tyvars (varl:varsr)
+      | fixity == Infix && length varsr > 1
+         = hsep [char '(',ppr (unLoc varl), pprInfixOcc (unLoc thing)
+                , (ppr.unLoc) (head varsr), char ')'
+                , hsep (map (ppr.unLoc) (tail varsr))]
       | fixity == Infix
          = hsep [ppr (unLoc varl), pprInfixOcc (unLoc thing)
          , hsep (map (ppr.unLoc) varsr)]
@@ -902,7 +907,7 @@ data FamilyDecl pass = FamilyDecl
   { fdInfo           :: FamilyInfo pass              -- type/data, closed/open
   , fdLName          :: Located (IdP pass)           -- type constructor
   , fdTyVars         :: LHsQTyVars pass              -- type variables
-  , fdFixity         :: LexicalFixity         -- Fixity used in the declaration
+  , fdFixity         :: LexicalFixity                -- Fixity used in the declaration
   , fdResultSig      :: LFamilyResultSig pass        -- result signature
   , fdInjectivityAnn :: Maybe (LInjectivityAnn pass) -- optional injectivity ann
   }
@@ -999,7 +1004,7 @@ pprFamilyDecl top_level (FamilyDecl { fdInfo = info, fdLName = ltycon
         ( text "where"
         , case mb_eqns of
             Nothing   -> text ".."
-            Just eqns -> vcat $ map ppr_fam_inst_eqn eqns )
+            Just eqns -> vcat $ map (ppr_fam_inst_eqn . unLoc) eqns )
       _ -> (empty, empty)
 
 pprFlavour :: FamilyInfo pass -> SDoc
@@ -1099,8 +1104,9 @@ instance (SourceTextX pass, OutputableBndrId pass)
         -- This complexity is to distinguish between
         --    deriving Show
         --    deriving (Show)
-        pp_dct [a@(HsIB { hsib_body = L _ HsAppsTy{} })] = parens (ppr a)
-        pp_dct [a] = ppr a
+        pp_dct [a@(HsIB { hsib_body = ty })]
+          | isCompoundHsType ty = parens (ppr a)
+          | otherwise           = ppr a
         pp_dct _   = parens (interpp'SP dct)
 
 data NewOrData
@@ -1143,8 +1149,19 @@ type LConDecl pass = Located (ConDecl pass)
 data ConDecl pass
   = ConDeclGADT
       { con_names   :: [Located (IdP pass)]
-      , con_type    :: LHsSigType pass
-        -- ^ The type after the ‘::’
+
+      -- The next four fields describe the type after the '::'
+      -- See Note [GADT abstract syntax]
+      , con_forall  :: Bool              -- ^ True <=> explicit forall
+                                         --   False => hsq_explicit is empty
+      , con_qvars   :: LHsQTyVars pass
+                       -- Whether or not there is an /explicit/ forall, we still
+                       -- need to capture the implicitly-bound type/kind variables
+
+      , con_mb_cxt  :: Maybe (LHsContext pass) -- ^ User-written context (if any)
+      , con_args    :: HsConDeclDetails pass   -- ^ Arguments; never InfixCon
+      , con_res_ty  :: LHsType pass            -- ^ Result type
+
       , con_doc     :: Maybe LHsDocString
           -- ^ A possible Haddock comment.
       }
@@ -1152,23 +1169,55 @@ data ConDecl pass
   | ConDeclH98
       { con_name    :: Located (IdP pass)
 
-      , con_qvars     :: Maybe (LHsQTyVars pass)
-        -- User-written forall (if any), and its implicit
-        -- kind variables
-        -- Non-Nothing needs -XExistentialQuantification
-        --               e.g. data T a = forall b. MkT b (b->a)
-        --               con_qvars = {b}
-
-      , con_cxt       :: Maybe (LHsContext pass)
-        -- ^ User-written context (if any)
-
-      , con_details   :: HsConDeclDetails pass
-          -- ^ Arguments
+      , con_forall  :: Bool   -- ^ True <=> explicit user-written forall
+                              --     e.g. data T a = forall b. MkT b (b->a)
+                              --     con_ex_tvs = {b}
+                              -- False => con_ex_tvs is empty
+      , con_ex_tvs :: [LHsTyVarBndr pass]      -- ^ Existentials only
+      , con_mb_cxt :: Maybe (LHsContext pass)  -- ^ User-written context (if any)
+      , con_args   :: HsConDeclDetails pass    -- ^ Arguments; can be InfixCon
 
       , con_doc       :: Maybe LHsDocString
           -- ^ A possible Haddock comment.
       }
 deriving instance (DataId pass) => Data (ConDecl pass)
+
+{- Note [GADT abstract syntax]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+There's a wrinkle in ConDeclGADT
+
+* For record syntax, it's all uniform.  Given:
+      data T a where
+        K :: forall a. Ord a => { x :: [a], ... } -> T a
+    we make the a ConDeclGADT for K with
+       con_qvars  = {a}
+       con_mb_cxt = Just [Ord a]
+       con_args   = RecCon <the record fields>
+       con_res_ty = T a
+
+  We need the RecCon before the reanmer, so we can find the record field
+  binders in HsUtils.hsConDeclsBinders.
+
+* However for a GADT constr declaration which is not a record, it can
+  be hard parse until we know operator fixities. Consider for example
+     C :: a :*: b -> a :*: b -> a :+: b
+  Initially this type will parse as
+      a :*: (b -> (a :*: (b -> (a :+: b))))
+  so it's hard to split up the arguments until we've done the precedence
+  resolution (in the renamer).
+
+  So:  - In the parser (RdrHsSyn.mkGadtDecl), we put the whole constr
+         type into the res_ty for a ConDeclGADT for now, and use
+         PrefixCon []
+            con_args   = PrefixCon []
+            con_res_ty = a :*: (b -> (a :*: (b -> (a :+: b))))
+
+       - In the renamer (RnSource.rnConDecl), we unravel it afer
+         operator fixities are sorted. So we generate. So we end
+         up with
+            con_args   = PrefixCon [ a :*: b, a :*: b ]
+            con_res_ty = a :+: b
+-}
 
 -- | Haskell data Constructor Declaration Details
 type HsConDeclDetails pass
@@ -1178,36 +1227,21 @@ getConNames :: ConDecl pass -> [Located (IdP pass)]
 getConNames ConDeclH98  {con_name  = name}  = [name]
 getConNames ConDeclGADT {con_names = names} = names
 
--- don't call with RdrNames, because it can't deal with HsAppsTy
-getConDetails :: ConDecl pass -> HsConDeclDetails pass
-getConDetails ConDeclH98  {con_details  = details} = details
-getConDetails ConDeclGADT {con_type     = ty     } = details
-  where
-    (details,_,_,_) = gadtDeclDetails ty
-
--- don't call with RdrNames, because it can't deal with HsAppsTy
-gadtDeclDetails :: LHsSigType pass
-                -> ( HsConDeclDetails pass
-                   , LHsType pass
-                   , LHsContext pass
-                   , [LHsTyVarBndr pass] )
-gadtDeclDetails HsIB {hsib_body = lbody_ty} = (details,res_ty,cxt,tvs)
-  where
-    (tvs, cxt, tau) = splitLHsSigmaTy lbody_ty
-    (details, res_ty)           -- See Note [Sorting out the result type]
-      = case tau of
-          L _ (HsFunTy (L l (HsRecTy flds)) res_ty')
-                  -> (RecCon (L l flds), res_ty')
-          _other  -> (PrefixCon [], tau)
+getConArgs :: ConDecl pass -> HsConDeclDetails pass
+getConArgs d = con_args d
 
 hsConDeclArgTys :: HsConDeclDetails pass -> [LBangType pass]
 hsConDeclArgTys (PrefixCon tys)    = tys
 hsConDeclArgTys (InfixCon ty1 ty2) = [ty1,ty2]
 hsConDeclArgTys (RecCon flds)      = map (cd_fld_type . unLoc) (unLoc flds)
 
-pp_data_defn :: (SourceTextX pass, OutputableBndrId pass)
-                  => (HsContext pass -> SDoc)   -- Printing the header
-                  -> HsDataDefn pass
+hsConDeclTheta :: Maybe (LHsContext pass) -> [LHsType pass]
+hsConDeclTheta Nothing            = []
+hsConDeclTheta (Just (L _ theta)) = theta
+
+pp_data_defn :: (SourceTextX p, OutputableBndrId p)
+                  => (HsContext p -> SDoc)   -- Printing the header
+                  -> HsDataDefn p
                   -> SDoc
 pp_data_defn pp_hdr (HsDataDefn { dd_ND = new_or_data, dd_ctxt = L _ context
                                 , dd_cType = mb_ct
@@ -1250,26 +1284,34 @@ instance (SourceTextX pass, OutputableBndrId pass)
 
 pprConDecl :: (SourceTextX pass, OutputableBndrId pass) => ConDecl pass -> SDoc
 pprConDecl (ConDeclH98 { con_name = L _ con
-                       , con_qvars = mtvs
-                       , con_cxt = mcxt
-                       , con_details = details
+                       , con_ex_tvs = ex_tvs
+                       , con_mb_cxt = mcxt
+                       , con_args = args
                        , con_doc = doc })
-  = sep [ppr_mbDoc doc, pprHsForAll tvs cxt,         ppr_details details]
+  = sep [ppr_mbDoc doc, pprHsForAll ex_tvs cxt, ppr_details args]
   where
     ppr_details (InfixCon t1 t2) = hsep [ppr t1, pprInfixOcc con, ppr t2]
     ppr_details (PrefixCon tys)  = hsep (pprPrefixOcc con
                                    : map (pprHsType . unLoc) tys)
     ppr_details (RecCon fields)  = pprPrefixOcc con
                                  <+> pprConDeclFields (unLoc fields)
-    tvs = case mtvs of
-      Nothing -> []
-      Just (HsQTvs { hsq_explicit = tvs }) -> tvs
+    cxt = fromMaybe (noLoc []) mcxt
+
+pprConDecl (ConDeclGADT { con_names = cons, con_qvars = qvars
+                        , con_mb_cxt = mcxt, con_args = args
+                        , con_res_ty = res_ty, con_doc = doc })
+  = ppr_mbDoc doc <+> ppr_con_names cons <+> dcolon
+    <+> (sep [pprHsForAll (hsq_explicit qvars) cxt,
+              ppr_arrow_chain (get_args args ++ [ppr res_ty]) ])
+  where
+    get_args (PrefixCon args) = map ppr args
+    get_args (RecCon fields)  = [pprConDeclFields (unLoc fields)]
+    get_args (InfixCon {})    = pprPanic "pprConDecl:GADT" (ppr cons)
 
     cxt = fromMaybe (noLoc []) mcxt
 
-pprConDecl (ConDeclGADT { con_names = cons, con_type = res_ty, con_doc = doc })
-  = sep [ppr_mbDoc doc <+> ppr_con_names cons <+> dcolon
-         <+> ppr res_ty]
+    ppr_arrow_chain (a:as) = sep (a : map (arrow <+>) as)
+    ppr_arrow_chain []     = empty
 
 ppr_con_names :: (OutputableBndr a) => [Located a] -> SDoc
 ppr_con_names = pprWithCommas (pprPrefixOcc . unLoc)
@@ -1283,27 +1325,35 @@ ppr_con_names = pprWithCommas (pprPrefixOcc . unLoc)
 
 Note [Type family instance declarations in HsSyn]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-The data type TyFamEqn represents one equation of a type family instance.
-It is parameterised over its tfe_pats field:
+The data type FamEqn represents one equation of a type family instance.
+Aside from the pass, it is also parameterised over two fields:
+feqn_pats and feqn_rhs.
+
+feqn_pats is either LHsTypes (for ordinary data/type family instances) or
+LHsQTyVars (for associated type family default instances). In particular:
 
  * An ordinary type family instance declaration looks like this in source Haskell
       type instance T [a] Int = a -> a
    (or something similar for a closed family)
-   It is represented by a TyFamInstEqn, with *type* in the tfe_pats field.
+   It is represented by a FamInstEqn, with a *type* (LHsType) in the feqn_pats
+   field.
 
  * On the other hand, the *default instance* of an associated type looks like
    this in source Haskell
       class C a where
         type T a b
         type T a b = a -> b   -- The default instance
-   It is represented by a TyFamDefltEqn, with *type variables* in the tfe_pats
-   field.
+   It is represented by a TyFamDefltEqn, with *type variables* (LHsQTyVars) in
+   the feqn_pats field.
+
+feqn_rhs is either an HsDataDefn (for data family instances) or an LHsType
+(for type family instances).
 -}
 
 ----------------- Type synonym family instances -------------
 
 -- | Located Type Family Instance Equation
-type LTyFamInstEqn  pass = Located (TyFamInstEqn  pass)
+type LTyFamInstEqn pass = Located (TyFamInstEqn pass)
   -- ^ May have 'ApiAnnotation.AnnKeywordId' : 'ApiAnnotation.AnnSemi'
   --   when in a list
 
@@ -1313,16 +1363,14 @@ type LTyFamInstEqn  pass = Located (TyFamInstEqn  pass)
 type LTyFamDefltEqn pass = Located (TyFamDefltEqn pass)
 
 -- | Haskell Type Patterns
-type HsTyPats pass = HsImplicitBndrs pass [LHsType pass]
-            -- ^ Type patterns (with kind and type bndrs)
-            -- See Note [Family instance declaration binders]
+type HsTyPats pass = [LHsType pass]
 
 {- Note [Family instance declaration binders]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-The HsTyPats field is LHS patterns or a type/data family instance.
-
-The hsib_vars of the HsImplicitBndrs are the template variables of the
-type patterns, i.e. fv(pat_tys).  Note in particular
+For ordinary data/type family instances, the feqn_pats field of FamEqn stores
+the LHS type (and kind) patterns. These type patterns can of course contain
+type (and kind) variables, which are bound in the hsib_vars field of the
+HsImplicitBndrs in FamInstEqn. Note in particular
 
 * The hsib_vars *includes* any anonymous wildcards.  For example
      type instance F a _ = a
@@ -1330,7 +1378,7 @@ type patterns, i.e. fv(pat_tys).  Note in particular
   '_' gets its own unique.  In this context wildcards behave just like
   an ordinary type variable, only anonymous.
 
-* The hsib_vars *including* type variables that are already in scope
+* The hsib_vars *includes* type variables that are already in scope
 
    Eg   class C s t where
           type F t p :: *
@@ -1344,45 +1392,30 @@ type patterns, i.e. fv(pat_tys).  Note in particular
           type F (a8,b9) x10 = x10->a8
    so that we can compare the type pattern in the 'instance' decl and
    in the associated 'type' decl
+
+For associated type family default instances (TyFamDefltEqn), instead of using
+type patterns with binders in a surrounding HsImplicitBndrs, we use raw type
+variables (LHsQTyVars) in the feqn_pats field of FamEqn.
 -}
 
 -- | Type Family Instance Equation
-type TyFamInstEqn  pass = TyFamEqn pass (HsTyPats pass)
+type TyFamInstEqn pass = FamInstEqn pass (LHsType pass)
 
 -- | Type Family Default Equation
-type TyFamDefltEqn pass = TyFamEqn pass (LHsQTyVars pass)
+type TyFamDefltEqn pass = FamEqn pass (LHsQTyVars pass) (LHsType pass)
   -- See Note [Type family instance declarations in HsSyn]
-
--- | Type Family Equation
---
--- One equation in a type family instance declaration
--- See Note [Type family instance declarations in HsSyn]
-data TyFamEqn pass pats
-  = TyFamEqn
-       { tfe_tycon  :: Located (IdP pass)
-       , tfe_pats   :: pats
-       , tfe_fixity :: LexicalFixity    -- ^ Fixity used in the declaration
-       , tfe_rhs    :: LHsType pass }
-    -- ^
-    --  - 'ApiAnnotation.AnnKeywordId' : 'ApiAnnotation.AnnEqual'
-
-    -- For details on above see note [Api annotations] in ApiAnnotation
-deriving instance (DataId pass, Data pats) => Data (TyFamEqn pass pats)
 
 -- | Located Type Family Instance Declaration
 type LTyFamInstDecl pass = Located (TyFamInstDecl pass)
 
 -- | Type Family Instance Declaration
-data TyFamInstDecl pass
-  = TyFamInstDecl
-       { tfid_eqn  :: LTyFamInstEqn pass
-       , tfid_fvs  :: PostRn pass NameSet }
+newtype TyFamInstDecl pass = TyFamInstDecl { tfid_eqn :: TyFamInstEqn pass }
     -- ^
     --  - 'ApiAnnotation.AnnKeywordId' : 'ApiAnnotation.AnnType',
     --           'ApiAnnotation.AnnInstance',
 
     -- For details on above see note [Api annotations] in ApiAnnotation
-deriving instance (DataId pass) => Data (TyFamInstDecl pass)
+deriving instance DataId pass => Data (TyFamInstDecl pass)
 
 ----------------- Data family instances -------------
 
@@ -1390,14 +1423,8 @@ deriving instance (DataId pass) => Data (TyFamInstDecl pass)
 type LDataFamInstDecl pass = Located (DataFamInstDecl pass)
 
 -- | Data Family Instance Declaration
-data DataFamInstDecl pass
-  = DataFamInstDecl
-       { dfid_tycon     :: Located (IdP pass)
-       , dfid_pats      :: HsTyPats   pass       -- LHS
-       , dfid_fixity    :: LexicalFixity    -- ^ Fixity used in the declaration
-       , dfid_defn      :: HsDataDefn pass       -- RHS
-       , dfid_fvs       :: PostRn pass NameSet }
-                                           -- Free vars for dependency analysis
+newtype DataFamInstDecl pass
+  = DataFamInstDecl { dfid_eqn :: FamInstEqn pass (HsDataDefn pass) }
     -- ^
     --  - 'ApiAnnotation.AnnKeywordId' : 'ApiAnnotation.AnnData',
     --           'ApiAnnotation.AnnNewType','ApiAnnotation.AnnInstance',
@@ -1406,8 +1433,38 @@ data DataFamInstDecl pass
     --           'ApiAnnotation.AnnClose'
 
     -- For details on above see note [Api annotations] in ApiAnnotation
-deriving instance (DataId pass) => Data (DataFamInstDecl pass)
+deriving instance DataId pass => Data (DataFamInstDecl pass)
 
+----------------- Family instances (common types) -------------
+
+-- | Located Family Instance Equation
+type LFamInstEqn pass rhs = Located (FamInstEqn pass rhs)
+
+-- | Family Instance Equation
+type FamInstEqn pass rhs
+  = HsImplicitBndrs pass (FamEqn pass (HsTyPats pass) rhs)
+            -- ^ Here, the @pats@ are type patterns (with kind and type bndrs).
+            -- See Note [Family instance declaration binders]
+
+-- | Family Equation
+--
+-- One equation in a type family instance declaration, data family instance
+-- declaration, or type family default.
+-- See Note [Type family instance declarations in HsSyn]
+-- See Note [Family instance declaration binders]
+data FamEqn pass pats rhs
+  = FamEqn
+       { feqn_tycon  :: Located (IdP pass)
+       , feqn_pats   :: pats
+       , feqn_fixity :: LexicalFixity -- ^ Fixity used in the declaration
+       , feqn_rhs    :: rhs
+       }
+    -- ^
+    --  - 'ApiAnnotation.AnnKeywordId' : 'ApiAnnotation.AnnEqual'
+
+    -- For details on above see note [Api annotations] in ApiAnnotation
+deriving instance (DataId pass, Data pats, Data rhs)
+                => Data (FamEqn pass pats rhs)
 
 ----------------- Class instances -------------
 
@@ -1468,19 +1525,19 @@ ppr_instance_keyword TopLevel    = text "instance"
 ppr_instance_keyword NotTopLevel = empty
 
 ppr_fam_inst_eqn :: (SourceTextX pass, OutputableBndrId pass)
-                 => LTyFamInstEqn pass -> SDoc
-ppr_fam_inst_eqn (L _ (TyFamEqn { tfe_tycon = tycon
-                                , tfe_pats  = pats
-                                , tfe_fixity = fixity
-                                , tfe_rhs   = rhs }))
-    = pp_fam_inst_lhs tycon pats fixity [] <+> equals <+> ppr rhs
+                 => TyFamInstEqn pass -> SDoc
+ppr_fam_inst_eqn (HsIB { hsib_body = FamEqn { feqn_tycon  = tycon
+                                            , feqn_pats   = pats
+                                            , feqn_fixity = fixity
+                                            , feqn_rhs    = rhs }})
+    = pprFamInstLHS tycon pats fixity [] Nothing <+> equals <+> ppr rhs
 
 ppr_fam_deflt_eqn :: (SourceTextX pass, OutputableBndrId pass)
                   => LTyFamDefltEqn pass -> SDoc
-ppr_fam_deflt_eqn (L _ (TyFamEqn { tfe_tycon = tycon
-                                 , tfe_pats  = tvs
-                                 , tfe_fixity = fixity
-                                 , tfe_rhs   = rhs }))
+ppr_fam_deflt_eqn (L _ (FamEqn { feqn_tycon  = tycon
+                               , feqn_pats   = tvs
+                               , feqn_fixity = fixity
+                               , feqn_rhs    = rhs }))
     = text "type" <+> pp_vanilla_decl_head tycon tvs fixity []
                   <+> equals <+> ppr rhs
 
@@ -1490,28 +1547,31 @@ instance (SourceTextX pass, OutputableBndrId pass)
 
 pprDataFamInstDecl :: (SourceTextX pass, OutputableBndrId pass)
                    => TopLevelFlag -> DataFamInstDecl pass -> SDoc
-pprDataFamInstDecl top_lvl (DataFamInstDecl { dfid_tycon = tycon
-                                            , dfid_pats  = pats
-                                            , dfid_fixity = fixity
-                                            , dfid_defn  = defn })
+pprDataFamInstDecl top_lvl (DataFamInstDecl { dfid_eqn = HsIB { hsib_body =
+                             FamEqn { feqn_tycon  = tycon
+                                    , feqn_pats   = pats
+                                    , feqn_fixity = fixity
+                                    , feqn_rhs    = defn }}})
   = pp_data_defn pp_hdr defn
   where
     pp_hdr ctxt = ppr_instance_keyword top_lvl
-              <+> pp_fam_inst_lhs tycon pats fixity ctxt
+              <+> pprFamInstLHS tycon pats fixity ctxt (dd_kindSig defn)
 
 pprDataFamInstFlavour :: DataFamInstDecl pass -> SDoc
-pprDataFamInstFlavour (DataFamInstDecl { dfid_defn = (HsDataDefn { dd_ND = nd }) })
+pprDataFamInstFlavour (DataFamInstDecl { dfid_eqn = HsIB { hsib_body =
+                        FamEqn { feqn_rhs = HsDataDefn { dd_ND = nd }}}})
   = ppr nd
 
-pp_fam_inst_lhs :: (SourceTextX pass, OutputableBndrId pass)
+pprFamInstLHS :: (SourceTextX pass, OutputableBndrId pass)
    => Located (IdP pass)
    -> HsTyPats pass
    -> LexicalFixity
    -> HsContext pass
+   -> Maybe (LHsKind pass)
    -> SDoc
-pp_fam_inst_lhs thing (HsIB { hsib_body = typats }) fixity context
+pprFamInstLHS thing typats fixity context mb_kind_sig
                                               -- explicit type patterns
-   = hsep [ pprHsContext context, pp_pats typats]
+   = hsep [ pprHsContext context, pp_pats typats, pp_kind_sig ]
    where
      pp_pats (patl:patsr)
        | fixity == Infix
@@ -1519,7 +1579,13 @@ pp_fam_inst_lhs thing (HsIB { hsib_body = typats }) fixity context
           , hsep (map (pprHsType.unLoc) patsr)]
        | otherwise = hsep [ pprPrefixOcc (unLoc thing)
                    , hsep (map (pprHsType.unLoc) (patl:patsr))]
-     pp_pats [] = empty
+     pp_pats [] = pprPrefixOcc (unLoc thing)
+
+     pp_kind_sig
+       | Just k <- mb_kind_sig
+       = dcolon <+> ppr k
+       | otherwise
+       = empty
 
 instance (SourceTextX pass, OutputableBndrId pass)
        => Outputable (ClsInstDecl pass) where
