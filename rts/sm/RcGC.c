@@ -16,6 +16,7 @@ void
 GarbageCollect_rc (ResourceContainer *rc)
 {
   debugTrace(DEBUG_gc, "Starting GC for rc %p", rc);
+  //takeSnapshot("/tmp/gc-before.json");
 
   rc->currentCopy = rc->generations[0]->old_blocks;
 
@@ -24,18 +25,24 @@ GarbageCollect_rc (ResourceContainer *rc)
   evacuate_rc((StgClosure **)(void *)&rc->ownerTSO->cap->run_queue_tl, rc);
   
 
-  pushWSDeque(rc->scavd_list, rc->currentCopy);
+  //pushWSDeque(rc->scavd_list, rc->currentCopy);
 
   bdescr *curr, *prev;
 
+  curr = popWSDeque(rc->scavd_list);
+  if (curr == NULL) {
+    debugTrace(DEBUG_gc, "GC didnt do any work");
+    curr = rc->currentCopy;
+  }
+
   while(1) {
-    curr = popWSDeque(rc->scavd_list);
     if (curr == NULL) {
       break;
     }
     debugTrace(DEBUG_gc, "Aboyt to scavenge %p", curr);
     scavenge_block(rc, curr);
     prev = curr;
+    curr = popWSDeque(rc->scavd_list);
   }
 
   debugTrace(DEBUG_gc, "Done scavenging");
@@ -44,7 +51,13 @@ GarbageCollect_rc (ResourceContainer *rc)
 
   bdescr *swap = rc->generations[0]->blocks;
   rc->generations[0]->blocks = rc->generations[0]->old_blocks;
-  rc->generations[0]->old_blocks = allocBlocksFor(rc, 100);
+  rc->generations[0]->old_blocks = swap;//allocBlocksFor(rc, 30);
+  
+  bdescr *bd;
+  for (bd = rc->generations[0]->old_blocks; bd != NULL; bd = bd->link) {
+    bd->flags = 0;
+    bd->free = bd->start;
+  }
 
 
   // Update the run_queue_hd and run_queue_tl forwarding ptrs
@@ -60,7 +73,7 @@ GarbageCollect_rc (ResourceContainer *rc)
       debugTrace(DEBUG_gc, "TSO HEAD IS A FORWARDING PTR");
       cap->run_queue_hd = (StgTSO *)UN_FORWARDING_PTR(info);
       debugTrace(DEBUG_gc, "FIXME: Setting the hd and tl of the run queue will fail with multiple threads!");
-      cap->run_queue_tl = (StgTSO *)UN_FORWARDING_PTR(info);
+      //cap->run_queue_tl = (StgTSO *)UN_FORWARDING_PTR(info);
       cap->r.rCurrentTSO = (StgTSO *)UN_FORWARDING_PTR(info);
       rc->ownerTSO = (StgTSO *)UN_FORWARDING_PTR(info);
       rc->nursery->blocks = rc->generations[0]->blocks;
@@ -83,8 +96,10 @@ GarbageCollect_rc (ResourceContainer *rc)
       debugTrace(DEBUG_gc, "TSO HEAD IS NOT A FORWARDING PTR");
   }
 
+  rc->currentCopy = rc->generations[0]->old_blocks;
+  rc->currentCopy->u.scan = rc->currentCopy->start;
+
   debugTrace(DEBUG_gc, "GC has completed");
-  //takeSnapshot("/tmp/derp.txt");
   /*
     RC Garbage collection:
 
