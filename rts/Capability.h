@@ -367,6 +367,10 @@ void markCapabilities (evac_fn evac, void *user);
 
 void traverseSparkQueues (evac_fn evac, void *user);
 
+// Scheduling
+void capabilityHandleTick(Capability *cap);
+void capabilitiesHandleTick(void);
+
 /* -----------------------------------------------------------------------------
    NUMA
    -------------------------------------------------------------------------- */
@@ -454,15 +458,20 @@ stopCapability (Capability *cap)
 INLINE_HEADER void
 interruptCapability (Capability *cap)
 {
-    stopCapability(cap);
-    cap->interrupt = 1;
+  stopCapability(cap);
+  cap->interrupt = 1;
 }
 
 INLINE_HEADER void
 contextSwitchCapability (Capability *cap)
 {
-    stopCapability(cap);
-    cap->context_switch = 1;
+    StgTSO *t = cap->run_queue_hd;
+    if (t != END_TSO_QUEUE && 
+        ((t->ticks != 0 && t->ticks_remaining < 1) ||
+          t->ticks == 0)) {
+      stopCapability(cap);
+      cap->context_switch = 1;
+    }
 }
 
 #ifdef THREADED_RTS

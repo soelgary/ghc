@@ -404,6 +404,19 @@ createIOThread (Capability *cap, W_ stack_size,  StgClosure *closure)
   return t;
 }
 
+StgTSO *
+createHIOThread (Capability *cap, W_ ticks, W_ stack_size,  StgClosure *closure)
+{
+  StgTSO *t;
+  t = createThread (cap, stack_size);
+  t->ticks = ticks;
+  t->ticks_remaining = ticks;
+  pushClosure(t, (W_)&stg_ap_v_info);
+  pushClosure(t, (W_)closure);
+  pushClosure(t, (W_)&stg_enter_info);
+  return t;
+}
+
 /*
  * Same as above, but also evaluate the result of the IO action
  * to whnf while we're at it.

@@ -43,6 +43,29 @@ static StgThreadID next_thread_id = 1;
  */
 #define MIN_STACK_WORDS (RESERVED_STACK_WORDS + sizeofW(StgStopFrame) + 3)
 
+/*
+ * Resource management 
+ */
+void
+releaseTime(StgTSO *tso, StgInt64 to_release)
+{
+  if (tso->ticks > 0 && to_release < tso->ticks) {
+    tso->ticks -= to_release;
+  }
+}
+
+void
+addTime(StgTSO *tso, StgInt64 to_add)
+{
+  tso->ticks += to_add;
+}
+
+StgInt64
+getTime(StgTSO *tso)
+{
+  return tso->ticks;;
+}
+
 /* ---------------------------------------------------------------------------
    Create a new thread.
 
@@ -131,6 +154,9 @@ createThread(Capability *cap, W_ size)
 
     // ToDo: report the stack size in the event?
     traceEventCreateThread(cap, tso);
+
+    tso->ticks = 0;
+    tso->ticks_remaining = 0;
 
     return tso;
 }

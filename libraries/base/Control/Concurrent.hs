@@ -38,14 +38,21 @@ module Control.Concurrent (
         forkFinally,
         forkIOWithUnmask,
         killThread,
+        hKillThread,
         throwTo,
 
         -- ** Threads with affinity
         forkOn,
+        hForkOn,
         forkOnWithUnmask,
         getNumCapabilities,
         setNumCapabilities,
         threadCapability,
+
+        -- ** CPU resource management
+        addTime,
+        releaseTime,
+        getTime,
 
         -- * Scheduling
 

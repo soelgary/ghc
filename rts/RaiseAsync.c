@@ -801,7 +801,8 @@ raiseAsync(Capability *cap, StgTSO *tso, StgClosure *exception,
     // ASSUMES: the thread is not already complete or dead
     // Upper layers should deal with that.
     ASSERT(tso->what_next != ThreadComplete &&
-           tso->what_next != ThreadKilled);
+           tso->what_next != ThreadKilled &&
+           tso->what_next != ThreadBusyWait);
 
     // only if we own this TSO (except that deleteThread() calls this
     ASSERT(tso->cap == cap);

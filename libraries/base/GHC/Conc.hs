@@ -30,6 +30,7 @@ module GHC.Conc
         , forkIOWithUnmask
         , forkOn
         , forkOnWithUnmask
+        , hForkOn
         , numCapabilities
         , getNumCapabilities
         , setNumCapabilities
@@ -38,6 +39,7 @@ module GHC.Conc
         , childHandler
         , myThreadId
         , killThread
+        , hKillThread
         , throwTo
         , par
         , pseq
@@ -45,6 +47,11 @@ module GHC.Conc
         , yield
         , labelThread
         , mkWeakThreadId
+
+        -- * CPU resource management
+        , addTime
+        , releaseTime
+        , getTime
 
         , ThreadStatus(..), BlockReason(..)
         , threadStatus

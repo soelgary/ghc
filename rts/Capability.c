@@ -458,6 +458,27 @@ void interruptAllCapabilities(void)
     }
 }
 
+/*
+ * Decrement remaining ticks for hierarchical threads
+ */
+void
+capabilityHandleTick(Capability *cap)
+{
+  StgTSO *t = cap->run_queue_hd;
+  if (t != END_TSO_QUEUE && t->ticks != 0) {
+    t->ticks_remaining--;
+  }
+}
+
+void
+capabilitiesHandleTick()
+{
+  uint32_t i;
+  for (i=0; i < n_capabilities; i++) {
+    capabilityHandleTick(capabilities[i]);
+  }
+}
+
 /* ----------------------------------------------------------------------------
  * Give a Capability to a Task.  The task must currently be sleeping
  * on its condition variable.

@@ -41,6 +41,7 @@ static
 void
 handle_tick(int unused STG_UNUSED)
 {
+  capabilitiesHandleTick();
   handleProfTick();
   if (RtsFlags.ConcFlags.ctxtSwitchTicks > 0) {
       ticks_to_ctxt_switch--;

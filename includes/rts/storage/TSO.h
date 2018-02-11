@@ -174,6 +174,15 @@ typedef struct StgTSO_ {
      */
     StgWord32  tot_stack_size;
 
+    /*
+     * Hierarchical scheduling requires each thread to run for a specified
+     * number of ticks. The ticks field specifies how many ticks this thread
+     * will run for (or give up). Ticks remaining is a countdown until it
+     * gets context switched.
+     */
+    StgInt64 ticks;
+    StgInt64 ticks_remaining;
+
 #ifdef TICKY_TICKY
     /* TICKY-specific stuff would go here. */
 #endif

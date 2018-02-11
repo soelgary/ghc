@@ -131,6 +131,7 @@ EXTERN_INLINE void
 appendToRunQueue (Capability *cap, StgTSO *tso)
 {
     ASSERT(tso->_link == END_TSO_QUEUE);
+    tso->ticks_remaining = tso->ticks;
     if (cap->run_queue_hd == END_TSO_QUEUE) {
         cap->run_queue_hd = tso;
         tso->block_info.prev = END_TSO_QUEUE;
@@ -151,16 +152,16 @@ pushOnRunQueue (Capability *cap, StgTSO *tso);
 EXTERN_INLINE void
 pushOnRunQueue (Capability *cap, StgTSO *tso)
 {
-    setTSOLink(cap, tso, cap->run_queue_hd);
-    tso->block_info.prev = END_TSO_QUEUE;
-    if (cap->run_queue_hd != END_TSO_QUEUE) {
-        setTSOPrev(cap, cap->run_queue_hd, tso);
-    }
-    cap->run_queue_hd = tso;
-    if (cap->run_queue_tl == END_TSO_QUEUE) {
-        cap->run_queue_tl = tso;
-    }
-    cap->n_run_queue++;
+  setTSOLink(cap, tso, cap->run_queue_hd);
+  tso->block_info.prev = END_TSO_QUEUE;
+  if (cap->run_queue_hd != END_TSO_QUEUE) {
+      setTSOPrev(cap, cap->run_queue_hd, tso);
+  }
+  cap->run_queue_hd = tso;
+  if (cap->run_queue_tl == END_TSO_QUEUE) {
+      cap->run_queue_tl = tso;
+  }
+  cap->n_run_queue++;
 }
 
 /* Pop the first thread off the runnable queue.
@@ -168,24 +169,25 @@ pushOnRunQueue (Capability *cap, StgTSO *tso)
 INLINE_HEADER StgTSO *
 popRunQueue (Capability *cap)
 {
-    StgTSO *t = cap->run_queue_hd;
-    ASSERT(t != END_TSO_QUEUE);
-    cap->run_queue_hd = t->_link;
-    if (t->_link != END_TSO_QUEUE) {
-        t->_link->block_info.prev = END_TSO_QUEUE;
-    }
-    t->_link = END_TSO_QUEUE; // no write barrier req'd
-    if (cap->run_queue_hd == END_TSO_QUEUE) {
-        cap->run_queue_tl = END_TSO_QUEUE;
-    }
-    cap->n_run_queue--;
-    return t;
+  StgTSO *t;
+  t = cap->run_queue_hd;
+  ASSERT(t != END_TSO_QUEUE);
+  cap->run_queue_hd = t->_link;
+  if (t->_link != END_TSO_QUEUE) {
+      t->_link->block_info.prev = END_TSO_QUEUE;
+  }
+  t->_link = END_TSO_QUEUE; // no write barrier req'd
+  if (cap->run_queue_hd == END_TSO_QUEUE) {
+      cap->run_queue_tl = END_TSO_QUEUE;
+  }
+  cap->n_run_queue--;
+  return t;
 }
 
 INLINE_HEADER StgTSO *
 peekRunQueue (Capability *cap)
 {
-    return cap->run_queue_hd;
+  return cap->run_queue_hd;
 }
 
 void promoteInRunQueue (Capability *cap, StgTSO *tso);
@@ -217,7 +219,7 @@ emptyQueue (StgTSO *q)
 INLINE_HEADER bool
 emptyRunQueue(Capability *cap)
 {
-    return cap->n_run_queue == 0;
+    return cap->n_run_queue == 0;// && cap->n_hrun_queue == 0;
 }
 
 INLINE_HEADER void

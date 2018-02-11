@@ -800,7 +800,8 @@ const char *what_next_strs[] = {
   [ThreadRunGHC]    = "ThreadRunGHC",
   [ThreadInterpret] = "ThreadInterpret",
   [ThreadKilled]    = "ThreadKilled",
-  [ThreadComplete]  = "ThreadComplete"
+  [ThreadComplete]  = "ThreadComplete",
+  [ThreadBusyWait]  = "ThreadBusyWait"
 };
 
 #else /* DEBUG */

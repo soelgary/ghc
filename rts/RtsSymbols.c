@@ -582,6 +582,7 @@
       SymI_HasProto(dirty_MUT_VAR)                                      \
       SymI_HasProto(dirty_TVAR)                                         \
       SymI_HasProto(stg_forkzh)                                         \
+      SymI_HasProto(stg_hForkzh)                                        \
       SymI_HasProto(stg_forkOnzh)                                       \
       SymI_HasProto(forkProcess)                                        \
       SymI_HasProto(forkOS_createThread)                                \
@@ -691,6 +692,9 @@
       SymI_HasProto(resumeThread)                                       \
       SymI_HasProto(setNumCapabilities)                                 \
       SymI_HasProto(getNumberOfProcessors)                              \
+      SymI_HasProto(releaseTime)                                        \
+      SymI_HasProto(addTime)                                            \
+      SymI_HasProto(getTime)                                            \
       SymI_HasProto(resolveObjs)                                        \
       SymI_HasProto(stg_retryzh)                                        \
       SymI_HasProto(rts_apply)                                          \

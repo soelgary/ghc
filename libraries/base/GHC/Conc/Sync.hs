@@ -39,6 +39,7 @@ module GHC.Conc.Sync
         , forkIOWithUnmask
         , forkOn
         , forkOnWithUnmask
+        , hForkOn
         , numCapabilities
         , getNumCapabilities
         , setNumCapabilities
@@ -47,6 +48,7 @@ module GHC.Conc.Sync
         , childHandler
         , myThreadId
         , killThread
+        , hKillThread
         , throwTo
         , par
         , pseq
@@ -66,6 +68,11 @@ module GHC.Conc.Sync
         , getAllocationCounter
         , enableAllocationLimit
         , disableAllocationLimit
+
+        -- * CPU management
+        , addTime
+        , releaseTime
+        , getTime
 
         -- * TVars
         , STM(..)
@@ -341,6 +348,44 @@ forkOn (I# cpu) action = IO $ \ s ->
 forkOnWithUnmask :: Int -> ((forall a . IO a -> IO a) -> IO ()) -> IO ThreadId
 forkOnWithUnmask cpu io = forkOn cpu (io unsafeUnmask)
 
+{- |
+Like 'forkOn', but will use the hierarchical scheduler rather than the normal
+scheduler. The hierarchical scheduler will schedule threads for a fixed amount
+of time (specified in `ticks`). The thread will be scheduled, even if
+terminated, until it is killed.
+-}
+hForkOn :: Int -> Int -> IO () -> IO ThreadId
+hForkOn (I# cpu) (I# ticks) action = IO $ \ s ->
+   case (hFork# cpu ticks action_plus s) of (# s1, tid #) -> (# s1, ThreadId tid #)
+ where
+  -- We must use 'catch' rather than 'catchException' because the action
+  -- could be bottom. #13330
+  action_plus = catch action childHandler
+
+foreign import ccall safe "addTime"
+  c_addTime :: ThreadId# -> CUInt -> IO ()
+
+foreign import ccall safe "releaseTime"
+  c_releaseTime :: ThreadId# -> CUInt -> IO ()
+
+foreign import ccall safe "getTime"
+  c_getTime :: ThreadId# -> IO Int
+
+addTime :: Int -> IO ()
+addTime ticks = do
+  ThreadId tid <- myThreadId
+  c_addTime tid (fromIntegral ticks)
+
+releaseTime :: Int -> IO ()
+releaseTime ticks = do
+  ThreadId tid <- myThreadId
+  c_releaseTime tid (fromIntegral ticks)
+
+getTime :: IO Int
+getTime = do
+  ThreadId tid <- myThreadId
+  c_getTime tid
+
 -- | the value passed to the @+RTS -N@ flag.  This is the number of
 -- Haskell threads that can run truly simultaneously at any given
 -- time, and is typically set to the number of physical processor cores on
@@ -424,6 +469,15 @@ thread (GHC only).
 -}
 killThread :: ThreadId -> IO ()
 killThread tid = throwTo tid ThreadKilled
+
+{- |Kills the given thread and returns the number of ticks that belonged
+   to the killed thread.
+-}
+hKillThread :: ThreadId -> IO Int
+hKillThread (ThreadId tid) = do
+  ticks <- c_getTime tid
+  () <- throwTo (ThreadId tid) ThreadKilled
+  return ticks
 
 {- | 'throwTo' raises an arbitrary exception in the target thread (GHC only).
 

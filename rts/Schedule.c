@@ -359,9 +359,16 @@ schedule (Capability *initialCapability, Task *task)
     // thread is created by the final GC, or a thread previously
     // in a foreign call returns.
     if (sched_state >= SCHED_INTERRUPTING &&
-        !(t->what_next == ThreadComplete || t->what_next == ThreadKilled)) {
+        !(t->what_next == ThreadComplete ||
+          t->what_next == ThreadKilled ||
+          t->what_next == ThreadBusyWait)) {
         deleteThread(cap,t);
     }
+    if (sched_state >= SCHED_INTERRUPTING &&
+        t->what_next == ThreadBusyWait) {
+          t->ticks = 0;
+          t->what_next = ThreadKilled;
+        }
 
     // If this capability is disabled, migrate the thread away rather
     // than running it.  NB. but not if the thread is bound: it is
@@ -452,9 +459,23 @@ run_thread:
 
     switch (prev_what_next) {
 
-    case ThreadKilled:
     case ThreadComplete:
+    {
+      if (t->ticks != 0) {
+        debugTrace(DEBUG_sched,
+          "H thread %d completed. It is about to busy wait", t->id);
+        ret = ThreadBusyWait;
+        break;
+      } else {
+        debugTrace(DEBUG_sched,
+          "H thread %d finished!. It is about to busy wait", t->id);
+        ret = ThreadFinished;
+      }
+      
+    }
+    case ThreadKilled:
         /* Thread already finished, return to scheduler. */
+        debugTrace(DEBUG_sched, "H thread %d killed!", t->id);
         ret = ThreadFinished;
         break;
 
@@ -471,6 +492,14 @@ run_thread:
         cap = interpretBCO(cap);
         ret = cap->r.rRet;
         break;
+    
+    case ThreadBusyWait:
+    {
+      debugTrace(DEBUG_sched, "Busy wait happening (%d %d/%d)...",
+        t->id, t->ticks_remaining, t->ticks);
+      ret = ThreadBusyWait;
+      break;
+    }
 
     default:
         barf("schedule: invalid what_next field");
@@ -534,6 +563,7 @@ run_thread:
         pushOnRunQueue(cap,t);
         break;
 
+    case ThreadBusyWait:
     case ThreadYielding:
         if (scheduleHandleYield(cap, t, prev_what_next)) {
             // shortcut for switching between compiler/interpreter:
@@ -546,9 +576,16 @@ run_thread:
         break;
 
     case ThreadFinished:
+    {
+      if (t->ticks != 0) {
+        t->what_next = ThreadBusyWait;
+        goto run_thread;
+      } else {
         if (scheduleHandleThreadFinished(cap, task, t)) return cap;
         ASSERT_FULL_CAPABILITY_INVARIANTS(cap,task);
         break;
+      }
+    }
 
     default:
       barf("schedule: invalid thread return code %d", (int)ret);
@@ -644,7 +681,6 @@ shouldYieldCapability (Capability *cap, Task *task, bool didGcLast)
     // another one.  This avoids a starvation situation where one
     // Capability keeps forcing a GC and the other Capabilities make no
     // progress at all.
-
     return ((pending_sync && !didGcLast) ||
             cap->n_returning_tasks != 0 ||
             (!emptyRunQueue(cap) && (task->incall->tso == NULL
@@ -1111,12 +1147,15 @@ schedulePostRunThread (Capability *cap, StgTSO *t)
 static bool
 scheduleHandleHeapOverflow( Capability *cap, StgTSO *t )
 {
-    if (cap->r.rHpLim == NULL || cap->context_switch) {
+    if ((cap->r.rHpLim == NULL || cap->context_switch) && t->ticks == 0) {
         // Sometimes we miss a context switch, e.g. when calling
         // primitives in a tight loop, MAYBE_GC() doesn't check the
         // context switch flag, and we end up waiting for a GC.
         // See #1984, and concurrent/should_run/1984
         cap->context_switch = 0;
+        debugTrace(DEBUG_sched,
+          "Context switching tso %d (%d/%d). Reason: Heap overflow",
+          t->id, t->ticks_remaining, t->ticks);
         appendToRunQueue(cap,t);
     } else {
         pushOnRunQueue(cap,t);
@@ -1230,11 +1269,17 @@ scheduleHandleYield( Capability *cap, StgTSO *t, uint32_t prev_what_next )
     // the CPU because the tick always arrives during GC).  This way
     // penalises threads that do a lot of allocation, but that seems
     // better than the alternative.
-    if (cap->context_switch != 0) {
-        cap->context_switch = 0;
-        appendToRunQueue(cap,t);
+    if (t->ticks != 0 && t->ticks_remaining < 1) {
+      cap->context_switch = 0;
+      debugTrace(DEBUG_sched,
+            "Context switching tso %d (%d/%d). Reason: Yield",
+            t->id, t->ticks_remaining, t->ticks);
+          appendToRunQueue(cap,t);
+    } else if (cap->context_switch != 0) {
+      cap->context_switch = 0;
+      appendToRunQueue(cap,t);
     } else {
-        pushOnRunQueue(cap,t);
+      pushOnRunQueue(cap,t);
     }
 
     IF_DEBUG(sanity,
@@ -1278,6 +1323,7 @@ scheduleHandleThreadBlocked( StgTSO *t
 static bool
 scheduleHandleThreadFinished (Capability *cap STG_UNUSED, Task *task, StgTSO *t)
 {
+    debugTrace(DEBUG_sched, "THREAD FINISHED %d/%d", t->ticks_remaining, t->ticks);
     /* Need to check whether this was a main thread, and if so,
      * return with the return value.
      *
@@ -1310,6 +1356,9 @@ scheduleHandleThreadFinished (Capability *cap STG_UNUSED, Task *task, StgTSO *t)
               // this thread and its return value (it gets dropped from the
               // step->threads list so there's no other way to find it).
               appendToRunQueue(cap,t);
+              debugTrace(DEBUG_sched,
+                "Context switching tso %d (%d/%d). Reason: Thread finished",
+                t->id, t->ticks_remaining, t->ticks);
               return false;
 #else
               // this cannot happen in the threaded RTS, because a
@@ -2291,7 +2340,9 @@ deleteAllThreads ( Capability *cap )
     for (g = 0; g < RtsFlags.GcFlags.generations; g++) {
         for (t = generations[g].threads; t != END_TSO_QUEUE; t = next) {
                 next = t->global_link;
-                deleteThread(cap,t);
+                if (t->what_next != ThreadBusyWait) {
+                  deleteThread(cap,t);
+                }
         }
     }
 
