@@ -46,7 +46,8 @@ highThread secret = do
   case sec of
     1 -> do
       s1 <- hFork 3 secretL (busyWait' len)
-      t1 <- busyWait 100000
+      () <- hKill s1 300
+      --t1 <- busyWait 100000
       --res <- lWait s1
       return 0
     _ -> do
@@ -63,40 +64,41 @@ analyzePublicChannel publicChannel = do
   -- threads. Then, change the case statement accordingly
   let (str,(_,count)) = channelToStringLast acc
   let (str',(_,count')) = channelToStringHead acc
-  () <- ioTCB $ print str'
-  () <- ioTCB $ print str
-  () <- ioTCB $ print $ length acc
+  --() <- ioTCB $ print str'
+  --() <- ioTCB $ print str
+  let l = show $ length acc
+  () <- ioTCB $ print $ (l ++ "  " ++ str' ++ "  " ++ str)
   case length acc of
     count | count < 100 -> return 1
     _                   -> return 0
 
-runLowThreads :: (LIORef DCLabel [String] -> DC Int) -> DC Int
-runLowThreads analyzer = do
-  publicChannel <- newLIORef publicL []
+runLowThreads :: LIORef DCLabel [String] -> DC Int
+runLowThreads publicChannel = do
   let cap1 = 1
   let cap2 = 2
   t1 <- hFork 2 publicL (cap1Write len publicChannel)
   t2 <- hFork 3 publicL (cap2Write len publicChannel)
   _  <- busyWait 100000
-  () <- lWait t1
-  () <- lWait t2
-  analyzer publicChannel
+  () <- hKill t1 100
+  () <- hKill t2 0
+  return 0
 
 mainDC :: DC (DCLabeled Int) -> DC Int
 mainDC secret = do
+  publicChannel <- newLIORef publicL []
   l <- getLabel
   let cap1 = 1
   let cap2 = 2
-  t1 <- hFork 2 publicL (runLowThreads analyzePublicChannel)
   t2 <- hFork 3 secretL (highThread secret)
-  r2 <- lWait t2
-  r1 <- lWait t1 -- Should be the secret!
-  return r1
+  t1 <- hFork 2 publicL (runLowThreads publicChannel)
+  r2 <- hKill' t2 300000
+  r1 <- hKill' t1 500000
+  analyzePublicChannel publicChannel
 
 main :: IO ()
 main = do
   l <- getArgs
   let secret = getArg l
   secret <- evalLIO (mainDC (label secretL secret)) initialLabelState
-  print $ "The secret is... " ++ (show secret)
+  --print $ "The secret is... " ++ (show secret)
   return ()

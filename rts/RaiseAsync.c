@@ -250,6 +250,13 @@ check_target:
         return THROWTO_SUCCESS;
     }
 
+    if (target->what_next == ThreadBusyWait) {
+      target->what_next = ThreadKilled;
+      target->ticks = 0;
+      ASSERT(target->what_next == ThreadKilled);
+      return THROWTO_SUCCESS;
+    }
+
     debugTraceCap(DEBUG_sched, cap,
                   "throwTo: from thread %lu to thread %lu",
                   (unsigned long)msg->source->id,

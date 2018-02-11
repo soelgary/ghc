@@ -1042,7 +1042,7 @@ shutdownCapability (Capability *cap USED_IF_THREADS,
     // running which caused problems later (the closeMutex() below
     // isn't safe, for one thing).
 
-    for (i = 0; /* i < 50 */; i++) {
+    for (i = 0;  /* i < 50 */ ; i++) {
         ASSERT(sched_state == SCHED_SHUTTING_DOWN);
 
         debugTrace(DEBUG_sched,

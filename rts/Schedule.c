@@ -144,7 +144,7 @@ static void scheduleActivateSpark(Capability *cap);
 static void schedulePostRunThread(Capability *cap, StgTSO *t);
 static bool scheduleHandleHeapOverflow( Capability *cap, StgTSO *t );
 static bool scheduleHandleYield( Capability *cap, StgTSO *t,
-                                 uint32_t prev_what_next );
+                                 uint32_t prev_what_next, Task *task );
 static void scheduleHandleThreadBlocked( StgTSO *t );
 static bool scheduleHandleThreadFinished( Capability *cap, Task *task,
                                           StgTSO *t );
@@ -467,8 +467,6 @@ run_thread:
         ret = ThreadBusyWait;
         break;
       } else {
-        debugTrace(DEBUG_sched,
-          "H thread %d finished!. It is about to busy wait", t->id);
         ret = ThreadFinished;
       }
       
@@ -495,8 +493,6 @@ run_thread:
     
     case ThreadBusyWait:
     {
-      debugTrace(DEBUG_sched, "Busy wait happening (%d %d/%d)...",
-        t->id, t->ticks_remaining, t->ticks);
       ret = ThreadBusyWait;
       break;
     }
@@ -564,8 +560,12 @@ run_thread:
         break;
 
     case ThreadBusyWait:
+    {
+      scheduleHandleYield(cap, t, prev_what_next, task);
+      break;
+    }
     case ThreadYielding:
-        if (scheduleHandleYield(cap, t, prev_what_next)) {
+        if (scheduleHandleYield(cap, t, prev_what_next, task)) {
             // shortcut for switching between compiler/interpreter:
             goto run_thread;
         }
@@ -1244,7 +1244,7 @@ scheduleHandleHeapOverflow( Capability *cap, StgTSO *t )
  * -------------------------------------------------------------------------- */
 
 static bool
-scheduleHandleYield( Capability *cap, StgTSO *t, uint32_t prev_what_next )
+scheduleHandleYield( Capability *cap, StgTSO *t, uint32_t prev_what_next, Task *task )
 {
     /* put the thread back on the run queue.  Then, if we're ready to
      * GC, check whether this is the last task to stop.  If so, wake
@@ -1257,10 +1257,15 @@ scheduleHandleYield( Capability *cap, StgTSO *t, uint32_t prev_what_next )
     // Shortcut if we're just switching evaluators: just run the thread.  See
     // Note [avoiding threadPaused] in Interpreter.c.
     if (t->what_next != prev_what_next) {
+      if (t->what_next == ThreadKilled) {
+        debugTrace(DEBUG_sched, "Thread %d was recently killed", t->id);
+        scheduleHandleThreadFinished(cap, task, t);
+      } else {
         debugTrace(DEBUG_sched,
                    "--<< thread %ld (%s) stopped to switch evaluators",
                    (long)t->id, what_next_strs[t->what_next]);
         return true;
+      }
     }
 
     // Reset the context switch flag.  We don't do this just before

@@ -22,6 +22,8 @@ module Common (
 , busyWait'
 , channelToStringRec
 , hFork
+, hKill
+, hKill'
   ) where
 
 
@@ -31,6 +33,7 @@ module Common (
 import LIO hiding (catch)
 import LIO.LIORef
 import LIO.DCLabel
+import LIO.Concurrent
 import LIO.Concurrent.LMVar
 import LIO.Core
 import LIO.Exception
@@ -87,12 +90,26 @@ TODO: Check labels can flow according to semantics.
 TODO: Handle exceptions
 TODO: Reclaim resources accordingly
 -}
-hKill :: Label l => IO.ThreadId -> Int -> LIO l ()
-hKill tid microseconds = do
+hKill :: Label l => LabeledResult l a -> Int -> LIO l ()
+hKill (LabeledResultTCB tid _ _ _) microseconds = do
+  --() <- ioTCB $ print "Killing...."
   () <- ioTCB $ IO.threadDelay microseconds
+  --() <- ioTCB $ print "Done waiting...."
   ticks <- ioTCB $ IO.hKillThread tid
+  --() <- ioTCB $ print "Killed...."
   () <- ioTCB $ IO.addTime ticks
+  --() <- ioTCB $ print "Ticks reclaimed...."
   return ()
+
+hKill' :: Label l => LabeledResult l a -> Int -> LIO l ()
+hKill' (LabeledResultTCB tid _ _ _) microseconds = do
+  --() <- ioTCB $ print "Killing...."
+  () <- ioTCB $ IO.threadDelay microseconds
+  --() <- ioTCB $ print "Done waiting...."
+  ticks <- ioTCB $ IO.hKillThread tid
+  --() <- ioTCB $ print "Killed...."
+  return ()
+
 --- END LIOPAR ---
 
 
