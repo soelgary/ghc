@@ -405,12 +405,19 @@ createIOThread (Capability *cap, W_ stack_size,  StgClosure *closure)
 }
 
 StgTSO *
-createHIOThread (Capability *cap, W_ ticks, W_ stack_size,  StgClosure *closure)
+createHIOThread (Capability *cap, StgTSO *parent, W_ ticks, W_ stack_size,  StgClosure *closure)
 {
   StgTSO *t;
   t = createThread (cap, stack_size);
   t->ticks = ticks;
   t->ticks_remaining = ticks;
+  if (parent->ticks != 0) {
+    t->parent = parent;
+    t->hlink = parent->children;
+    parent->children = t;
+  } else {
+    cap->hrun_queue = t;
+  }
   pushClosure(t, (W_)&stg_ap_v_info);
   pushClosure(t, (W_)closure);
   pushClosure(t, (W_)&stg_enter_info);

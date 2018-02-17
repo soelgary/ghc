@@ -157,6 +157,9 @@ createThread(Capability *cap, W_ size)
 
     tso->ticks = 0;
     tso->ticks_remaining = 0;
+    tso->parent = NULL;
+    tso->hlink = NULL;
+    tso->children = NULL;
 
     return tso;
 }

@@ -882,6 +882,7 @@ again: MAYBE_GC(again);
 
     ("ptr" threadid) = ccall createHIOThread(
         MyCapability() "ptr",
+        CurrentTSO "ptr",
         ticks,
         RtsFlags_GcFlags_initialStkSize(RtsFlags),
         closure "ptr");

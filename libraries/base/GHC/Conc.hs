@@ -40,6 +40,7 @@ module GHC.Conc
         , myThreadId
         , killThread
         , hKillThread
+        , forceOnQueue
         , throwTo
         , par
         , pseq

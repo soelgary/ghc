@@ -49,6 +49,7 @@ module GHC.Conc.Sync
         , myThreadId
         , killThread
         , hKillThread
+        , forceOnQueue
         , throwTo
         , par
         , pseq
@@ -469,6 +470,13 @@ thread (GHC only).
 -}
 killThread :: ThreadId -> IO ()
 killThread tid = throwTo tid ThreadKilled
+
+
+foreign import ccall safe "forceOnQueue"
+  c_forceOnQueue :: ThreadId# -> IO ()
+
+forceOnQueue :: ThreadId -> IO ()
+forceOnQueue (ThreadId tid) = c_forceOnQueue tid
 
 {- |Kills the given thread and returns the number of ticks that belonged
    to the killed thread.

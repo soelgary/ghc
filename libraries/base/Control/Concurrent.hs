@@ -40,6 +40,7 @@ module Control.Concurrent (
         killThread,
         hKillThread,
         throwTo,
+        forceOnQueue,
 
         -- ** Threads with affinity
         forkOn,

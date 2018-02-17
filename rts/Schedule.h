@@ -130,17 +130,23 @@ appendToRunQueue (Capability *cap, StgTSO *tso);
 EXTERN_INLINE void
 appendToRunQueue (Capability *cap, StgTSO *tso)
 {
+    if (tso->_link == tso) {
+      debugTrace(DEBUG_sched, "Bad stuff is about to happen...");
+    }
     ASSERT(tso->_link == END_TSO_QUEUE);
     tso->ticks_remaining = tso->ticks;
     if (cap->run_queue_hd == END_TSO_QUEUE) {
+        debugTrace(DEBUG_sched, "Bad stuff is about to happen here...");
         cap->run_queue_hd = tso;
         tso->block_info.prev = END_TSO_QUEUE;
     } else {
+        debugTrace(DEBUG_sched, "Bad stuff is about to happen over here...");
         setTSOLink(cap, cap->run_queue_tl, tso);
         setTSOPrev(cap, tso, cap->run_queue_tl);
     }
     cap->run_queue_tl = tso;
     cap->n_run_queue++;
+    ASSERT(tso->_link != tso);
 }
 
 /* Push a thread on the beginning of the run queue.
@@ -152,6 +158,13 @@ pushOnRunQueue (Capability *cap, StgTSO *tso);
 EXTERN_INLINE void
 pushOnRunQueue (Capability *cap, StgTSO *tso)
 {
+  ASSERT(tso != cap->run_queue_hd);
+  if (tso->_link == tso) {
+    debugTrace(DEBUG_sched, "Bad stuff is about to happen...");
+  }
+  if (tso->id == 0x8) {
+    debugTrace(DEBUG_sched, "Bad stuff is about to happen...!!");
+  }
   setTSOLink(cap, tso, cap->run_queue_hd);
   tso->block_info.prev = END_TSO_QUEUE;
   if (cap->run_queue_hd != END_TSO_QUEUE) {
@@ -162,6 +175,7 @@ pushOnRunQueue (Capability *cap, StgTSO *tso)
       cap->run_queue_tl = tso;
   }
   cap->n_run_queue++;
+  ASSERT(tso->_link != tso);
 }
 
 /* Pop the first thread off the runnable queue.
@@ -183,6 +197,55 @@ popRunQueue (Capability *cap)
   cap->n_run_queue--;
   return t;
 }
+
+/* H threads will reach a point where they must find a higher (in the hierarchy)
+ * thread to schedule. The algorithm for this is as follows.
+ * 
+ *  Loop until a thread is found or the main H thread is reached
+ *  1. If there is a thread directly to the right, schedule it.
+ *  2. Jump to the parent
+ *  3. If the parent is the main H thread, append it to the run queue
+ * 
+ */
+void
+contextSwitchHThreadUP (Capability *cap, StgTSO *tso);
+
+/* Context switching hierarchical threads is a little tricky. The only H thread
+ * allowed to remain on the run queue is the H thread that owns the capability.
+ * This way the queue does not get flooded with secret TSOs. A context switch
+ * needs to find the next H thread to run and push it on the run queue.
+ * Additionally, it needs to remove the previous H thread from the run queue,
+ * so long as it is not the parent. If there is not another H thread to run,
+ * this will append to the main H thread to the run queue.
+ *
+ * H Thread hierarchy
+ *            |P|
+ *           /   \
+ *        |c1|   |c2|
+ *       /    \
+ *    |c3|    |c4|
+ * 
+ * 
+ * Given the thread hierarchy, each time 'contextSwitchHThread' gets called,
+ * the queue should be changed as follows. Threads t1...tn are normal threads
+ * scheduled alongside the H threads.
+ * 
+ * Start: |P| -> |t1| -> ... -> |tn|
+ *        ==>
+ * CS 1:  |c1| -> |P| -> |t1| -> ... -> |tn|
+ *        ==>
+ * CS 2:  |c3| -> |P| -> |t1| -> ... -> |tn|
+ *        ==>
+ * CS 3:  |c4| -> |P| -> |t1| -> ... -> |tn|
+ *        ==>
+ * CS 4:  |c2| -> |P| -> |t1| -> ... -> |tn|
+ *        ==>
+ * CS 5:  |t1| -> ... -> |tn| -> |P|
+ * 
+ */
+void
+contextSwitchHThread (Capability *cap, StgTSO *tso);
+
 
 INLINE_HEADER StgTSO *
 peekRunQueue (Capability *cap)

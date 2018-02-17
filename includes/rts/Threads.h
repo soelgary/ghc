@@ -32,7 +32,7 @@ StgTSO *createGenThread       (Capability *cap, W_ stack_size,
                                StgClosure *closure);
 StgTSO *createIOThread        (Capability *cap, W_ stack_size,
                                StgClosure *closure);
-StgTSO *createHIOThread       (Capability *cap, W_ ticks, W_ stack_size,
+StgTSO *createHIOThread       (Capability *cap, StgTSO *parent, W_ ticks, W_ stack_size,
                                StgClosure *closure);
 StgTSO *createStrictIOThread  (Capability *cap, W_ stack_size,
                                StgClosure *closure);
@@ -82,5 +82,6 @@ extern void setNumCapabilities (uint32_t new_);
 extern void releaseTime    (StgTSO *tso, StgInt64 to_release);
 extern void addTime        (StgTSO *tso, StgInt64 to_add);
 extern StgInt64 getTime    (StgTSO *tso);
+extern void forceOnQueue(StgTSO *tso);
 
 #endif /* RTS_THREADS_H */

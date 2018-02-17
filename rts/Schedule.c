@@ -412,6 +412,7 @@ run_thread:
     // Run the current thread
 
     ASSERT_FULL_CAPABILITY_INVARIANTS(cap,task);
+    debugTrace(DEBUG_sched, "Running tso %d on cap %d! Expected cap %d", t->id, cap->no, t->cap->no);
     ASSERT(t->cap == cap);
     ASSERT(t->bound ? t->bound->task->cap == cap : 1);
 
@@ -600,6 +601,53 @@ run_thread:
 /* -----------------------------------------------------------------------------
  * Run queue operations
  * -------------------------------------------------------------------------- */
+
+void
+contextSwitchHThreadUP(Capability *cap, StgTSO *tso)
+{
+  StgTSO *t = tso;
+  while(1) {
+    if (t->hlink != NULL && t->hlink != END_TSO_QUEUE) {
+      // schedule tso->hlink
+      debugTrace(DEBUG_sched, "Setting hlink %p", t);
+      if (t->hlink != cap->run_queue_hd) {
+        pushOnRunQueue(cap, t->hlink);
+      }
+      return;
+    } else if (t->parent == NULL) {
+      debugTrace(DEBUG_sched, "H threads have all finished. Putting main H thread at end of the run queue");
+      //ASSERT(cap->run_queue_hd == t);
+      // t is the main H thread -- put it at the end of the run queue
+      //popRunQueue(cap); // this thread is already at the front
+      if (cap->run_queue_hd != t) {
+        appendToRunQueue(cap, t);
+      }
+      return;
+    } else {
+      // set t to the parent and iterate
+      t = t->parent;
+    }
+  }
+}
+void
+contextSwitchHThread(Capability *cap, StgTSO *tso)
+{
+  debugTrace(DEBUG_sched, "HCS: %d", tso->id);
+  tso->ticks_remaining = tso->ticks;
+  //if (tso->parent == NULL || tso->parent == END_TSO_QUEUE) return;
+  if (tso->children != NULL) {
+    // There are children.
+    // Schedule the first child
+    if (tso->children != cap->run_queue_hd) {
+      pushOnRunQueue(cap, tso->children);
+    }
+  } else if (tso->children == NULL) {
+    // This is a leaf child. It needs to schedule the next thread at the same
+    // level
+    contextSwitchHThreadUP(cap,tso);
+  }
+  debugTrace(DEBUG_sched, "To: %d", cap->run_queue_hd->id);
+}
 
 static void
 removeFromRunQueue (Capability *cap, StgTSO *tso)
@@ -1279,7 +1327,17 @@ scheduleHandleYield( Capability *cap, StgTSO *t, uint32_t prev_what_next, Task *
       debugTrace(DEBUG_sched,
             "Context switching tso %d (%d/%d). Reason: Yield",
             t->id, t->ticks_remaining, t->ticks);
-          appendToRunQueue(cap,t);
+     
+      contextSwitchHThread(cap, t);
+      /*if (t->children != NULL) {
+        pushOnRunQueue(cap, t->children);
+      } else if (t->hlink != NULL) {
+        pushOnRunQueue(cap, t->hlink);
+      } else if (t->parent != NULL && t->parent->) {
+        appendToRunQueue(cap,t->parent);
+      } else {
+        ASSERT(1 == 0); // should never happen!
+      }*/
     } else if (cap->context_switch != 0) {
       cap->context_switch = 0;
       appendToRunQueue(cap,t);
@@ -2567,6 +2625,7 @@ scheduleThreadOn(Capability *cap, StgWord cpu USED_IF_THREADS, StgTSO *tso)
     tso->flags |= TSO_LOCKED; // we requested explicit affinity; don't
                               // move this thread from now on.
 #if defined(THREADED_RTS)
+    if (tso->parent != NULL && tso->parent != END_TSO_QUEUE) return;
     cpu %= enabled_capabilities;
     if (cpu == cap->no) {
         appendToRunQueue(cap,tso);
@@ -3120,4 +3179,11 @@ resurrectThreads (StgTSO *threads)
                  tso->why_blocked);
         }
     }
+}
+
+void
+forceOnQueue(StgTSO *tso)
+{
+  debugTrace(DEBUG_sched, "Forcing tso on rn queue");
+  pushOnRunQueue(tso->cap, tso);
 }

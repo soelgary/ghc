@@ -90,10 +90,11 @@ TODO: Check labels can flow according to semantics.
 TODO: Handle exceptions
 TODO: Reclaim resources accordingly
 -}
-hKill :: Label l => LabeledResult l a -> Int -> LIO l ()
-hKill (LabeledResultTCB tid _ _ _) microseconds = do
-  --() <- ioTCB $ print "Killing...."
+hKill :: Label l => LabeledResult l a -> Int -> Int -> String -> LIO l ()
+hKill (LabeledResultTCB tid _ _ _) microseconds cap msg = do
   () <- ioTCB $ IO.threadDelay microseconds
+  () <- ioTCB $ print $ "Killing...." ++ msg
+  () <- ioTCB $ IO.forceOnQueue tid
   --() <- ioTCB $ print "Done waiting...."
   ticks <- ioTCB $ IO.hKillThread tid
   --() <- ioTCB $ print "Killed...."
@@ -101,10 +102,10 @@ hKill (LabeledResultTCB tid _ _ _) microseconds = do
   --() <- ioTCB $ print "Ticks reclaimed...."
   return ()
 
-hKill' :: Label l => LabeledResult l a -> Int -> LIO l ()
-hKill' (LabeledResultTCB tid _ _ _) microseconds = do
-  --() <- ioTCB $ print "Killing...."
+hKill' :: Label l => LabeledResult l a -> Int -> Int -> LIO l ()
+hKill' (LabeledResultTCB tid _ _ _) microseconds cap = do
   () <- ioTCB $ IO.threadDelay microseconds
+  () <- ioTCB $ print "Killing....!!!"
   --() <- ioTCB $ print "Done waiting...."
   ticks <- ioTCB $ IO.hKillThread tid
   --() <- ioTCB $ print "Killed...."

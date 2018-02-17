@@ -78,6 +78,16 @@ scavengeTSO (StgTSO *tso)
 
     evacuate((StgClosure **)&tso->stackobj);
 
+    if (tso->hlink != NULL) {
+      evacuate((StgClosure **)&tso->hlink);
+    }
+    if (tso->children != NULL) {
+      evacuate((StgClosure **)&tso->children);
+    }
+    if (tso->parent != NULL) {
+      evacuate((StgClosure **)&tso->parent);
+    }
+
     evacuate((StgClosure **)&tso->_link);
     if (   tso->why_blocked == BlockedOnMVar
         || tso->why_blocked == BlockedOnMVarRead
