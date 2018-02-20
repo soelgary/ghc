@@ -212,6 +212,9 @@
 #define ThreadBusyWait  26      /* thread has finished, but must be scheduled */
 #define ThreadSuspend   27      /* thread must suspend for a while */
 
+/* If the number of remaining ticks is less than this, then context switch */
+#define TICK_THRESHOLD  10
+
 /*
  * Constants for the why_blocked field of a TSO
  * NB. keep these in sync with GHC/Conc/Sync.hs: threadStatus

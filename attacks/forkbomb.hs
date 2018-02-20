@@ -45,9 +45,9 @@ highThread secret = do
   sec <- unlabel secret
   case sec of
     1 -> do
-      s1 <- hFork 1 secretL (busyWait' len)
-      s1 <- hFork 1 secretL (busyWait' len)
-      --t1 <- busyWait 100000
+      s1 <- hFork 1 100 secretL (busyWait' len)
+      s1 <- hFork 1 100 secretL (busyWait' len)
+      t1 <- busyWait 10000000
       --res <- lWait s1
       return 0
     _ -> do
@@ -76,10 +76,10 @@ runLowThreads :: LIORef DCLabel [String] -> DC Int
 runLowThreads publicChannel = do
   let cap1 = 1
   let cap2 = 2
-  t1 <- hFork 0 publicL (cap1Write len publicChannel)
-  t2 <- hFork 1 publicL (cap2Write len publicChannel)
+  t1 <- hFork 0 100 publicL (cap1Write len publicChannel)
+  t2 <- hFork 1 100 publicL (cap2Write len publicChannel)
   --_  <- busyWait 100000
-  () <- hKill t1 4 0 "public1"
+  () <- hKill t1 400 0 "public1"
   () <- hKill t2 0 1 "public2"
   return 0
 
@@ -89,9 +89,9 @@ mainDC secret = do
   l <- getLabel
   let cap1 = 1
   let cap2 = 2
-  t2 <- hFork 1 secretL (highThread secret)
-  t1 <- hFork 0 publicL (runLowThreads publicChannel)
-  r2 <- hKill' t2 8 1
+  t2 <- hFork 1 100 secretL (highThread secret)
+  t1 <- hFork 0 100 publicL (runLowThreads publicChannel)
+  r2 <- hKill' t2 800 1
   r1 <- hKill' t1 0 0
   analyzePublicChannel publicChannel
 

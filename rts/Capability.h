@@ -101,6 +101,9 @@ struct Capability_ {
     // Haskell code, and switch threads.
     int context_switch;
 
+    // The number of unprocessed ticks that have occurred
+    int unprocessed_ticks;
+
     // Interrupt flag.  Like the context_switch flag, this also
     // indicates that we should stop running Haskell code, but we do
     // *not* switch threads.  This is used to stop a Capability in

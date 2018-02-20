@@ -313,6 +313,7 @@ schedule (Capability *initialCapability, Task *task)
     }
 #endif
 
+pop_thread:
     //
     // Get a thread to run
     //
@@ -400,6 +401,19 @@ schedule (Capability *initialCapability, Task *task)
     }
 
 run_thread:
+
+    // Process the ticks
+    if (t->suspendTicks > 0) {
+      t->suspendTicks-= cap->unprocessed_ticks;
+    }
+    if (t->ticks != 0) {
+      t->ticks_remaining -= cap->unprocessed_ticks;
+      if (t->ticks_remaining < TICK_THRESHOLD) {
+        contextSwitchHThread(cap, t);
+        goto pop_thread;
+      }
+    }
+    cap->unprocessed_ticks = 0;
 
     // CurrentTSO is the thread to run. It might be different if we
     // loop back to run_thread, so make sure to set CurrentTSO after
@@ -654,9 +668,15 @@ contextSwitchHThread(Capability *cap, StgTSO *tso)
   debugTrace(DEBUG_sched, "HCS: %d", tso->id);
   debugTrace(DEBUG_sched, "Children: %p", tso->children);
   if (tso->ticks_remaining < 0) {
-    barf("TSO %d went into the negative (%d/%d)",
+    debugTrace(DEBUG_sched, "TSO %d went into the negative (%d/%d)",
       tso->id, tso->ticks_remaining, tso->ticks);
   }
+
+  while (tso->ticks_remaining > 0) {
+    tso->ticks_remaining -= cap->unprocessed_ticks;
+    cap->unprocessed_ticks = 0;
+  } // block until ticks are up
+
   tso->ticks_remaining = tso->ticks;
   //if (tso->parent == NULL || tso->parent == END_TSO_QUEUE) return;
   if (tso->children != NULL) {
@@ -1229,7 +1249,7 @@ scheduleHandleHeapOverflow( Capability *cap, StgTSO *t )
           "Context switching tso %d (%d/%d). Reason: Heap overflow",
           t->id, t->ticks_remaining, t->ticks);
         appendToRunQueue(cap,t);
-    } else if (t->ticks != 0 && t->ticks_remaining < 1) {
+    } else if (t->ticks != 0 && t->ticks_remaining < TICK_THRESHOLD) {
       debugTrace(DEBUG_sched,
           "Context switching tso %d (%d/%d). Reason: Heap overflow",
           t->id, t->ticks_remaining, t->ticks);
@@ -1355,7 +1375,7 @@ scheduleHandleYield( Capability *cap, StgTSO *t, uint32_t prev_what_next, Task *
     // the CPU because the tick always arrives during GC).  This way
     // penalises threads that do a lot of allocation, but that seems
     // better than the alternative.
-    else if (t->ticks != 0 && t->ticks_remaining < 1) {
+    else if (t->ticks != 0 && t->ticks_remaining < TICK_THRESHOLD) {
       cap->context_switch = 0;
       debugTrace(DEBUG_sched,
             "Context switching tso %d (%d/%d). Reason: Yield",
@@ -1958,6 +1978,7 @@ delete_threads_and_gc:
     }
 #endif
 
+  stopTimer();
 #if defined(THREADED_RTS)
     // reset pending_sync *before* GC, so that when the GC threads
     // emerge they don't immediately re-enter the GC.
@@ -1966,6 +1987,7 @@ delete_threads_and_gc:
 #else
     GarbageCollect(collect_gen, heap_census, 0, cap, NULL);
 #endif
+  startTimer();
 
     traceSparkCounters(cap);
 

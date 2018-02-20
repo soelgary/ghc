@@ -58,21 +58,22 @@ import Data.IORef
 
 hFork :: Label l
       => Int
+      -> Int
       -> l                -- ^ Label of result
       -> LIO l a          -- ^ Computation to execute in separate thread
       -> LIO l (LabeledResult l a) -- ^ Labeled result
-hFork cap = lForkPC cap noPrivs
+hFork cap ticks = lForkPC cap ticks noPrivs
 
 -- | Same as 'lFork', but the supplied set of priviliges are accounted
 -- for when performing label comparisons.
 lForkPC :: PrivDesc l p =>
-          Int -> Priv p -> l -> LIO l a -> LIO l (LabeledResult l a)
-lForkPC cap p l (LIOTCB action) = do
+          Int -> Int -> Priv p -> l -> LIO l a -> LIO l (LabeledResult l a)
+lForkPC cap ticks p l (LIOTCB action) = do
   withContext "lForkP" $ guardAllocP p l
   mv <- ioTCB IO.newEmptyMVar
   st <- ioTCB $ newIORef LResEmpty
   s0 <- getLIOStateTCB
-  tid <- ioTCB $ IO.mask $ \unmask -> IO.hForkOn cap 2 $ do
+  tid <- ioTCB $ IO.mask $ \unmask -> IO.hForkOn cap ticks $ do
     sp <- newIORef s0
     ea <- IO.try $ unmask $ action sp
     LIOState lEnd _ <- readIORef sp

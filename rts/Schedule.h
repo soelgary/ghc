@@ -134,18 +134,28 @@ appendToRunQueue (Capability *cap, StgTSO *tso)
       debugTrace(DEBUG_sched, "Bad stuff is about to happen...");
     }
     ASSERT(tso->_link == END_TSO_QUEUE);
+    debugTrace(DEBUG_sched, "Ticks before (%d)", tso->ticks_remaining);
     tso->ticks_remaining = tso->ticks;
+    cap->unprocessed_ticks = 0;
+    debugTrace(DEBUG_sched, "Ticks after (%d)", tso->ticks_remaining);
+    int appended = 0;
     if (cap->run_queue_hd == END_TSO_QUEUE) {
         debugTrace(DEBUG_sched, "Bad stuff is about to happen here...");
         cap->run_queue_hd = tso;
         tso->block_info.prev = END_TSO_QUEUE;
-    } else {
+        appended = 1;
+    } else if (cap->run_queue_tl != tso) {
+        ASSERT(tso != cap->run_queue_tl);
         debugTrace(DEBUG_sched, "Bad stuff is about to happen over here...");
         setTSOLink(cap, cap->run_queue_tl, tso);
         setTSOPrev(cap, tso, cap->run_queue_tl);
+        appended = 1;
     }
-    cap->run_queue_tl = tso;
-    cap->n_run_queue++;
+
+    if (appended) {
+      cap->run_queue_tl = tso;
+      cap->n_run_queue++;
+    }
     ASSERT(tso->_link != tso);
 }
 

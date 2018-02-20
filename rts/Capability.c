@@ -255,6 +255,8 @@ initCapability (Capability *cap, uint32_t i)
     cap->run_queue_tl      = END_TSO_QUEUE;
     cap->n_run_queue       = 0;
 
+    cap->unprocessed_ticks = 0;
+
 #if defined(THREADED_RTS)
     initMutex(&cap->lock);
     cap->running_task      = NULL; // indicates cap is free
@@ -464,8 +466,11 @@ void interruptAllCapabilities(void)
 void
 capabilityHandleTick(Capability *cap)
 {
+  cap->unprocessed_ticks++;
+  /*
   StgTSO *t = cap->r.rCurrentTSO;
   if (t == NULL) {
+    barf("current tso is null");
     t = cap->run_queue_hd;
   }
   if (t != END_TSO_QUEUE && t != NULL && t->ticks != 0) {
@@ -473,7 +478,7 @@ capabilityHandleTick(Capability *cap)
   }
   if (t != END_TSO_QUEUE && t != NULL && t->suspendTicks > 0) {
     t->suspendTicks--;
-  }
+  }*/
 }
 
 void
