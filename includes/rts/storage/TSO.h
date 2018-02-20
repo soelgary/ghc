@@ -185,6 +185,7 @@ typedef struct StgTSO_ {
     StgTSO *children;
     StgTSO *hlink;
     StgTSO *parent;
+    StgInt64 suspendTicks;
 
 #ifdef TICKY_TICKY
     /* TICKY-specific stuff would go here. */

@@ -40,6 +40,7 @@ module GHC.Conc.Sync
         , forkOn
         , forkOnWithUnmask
         , hForkOn
+        , tickDelay
         , numCapabilities
         , getNumCapabilities
         , setNumCapabilities
@@ -362,6 +363,11 @@ hForkOn (I# cpu) (I# ticks) action = IO $ \ s ->
   -- We must use 'catch' rather than 'catchException' because the action
   -- could be bottom. #13330
   action_plus = catch action childHandler
+
+tickDelay :: Int -> IO ()
+tickDelay (I# ticks) = IO $ \ s ->
+  case (tickDelay# ticks s) of
+    s1 -> (# s1, () #)
 
 foreign import ccall safe "addTime"
   c_addTime :: ThreadId# -> CUInt -> IO ()

@@ -470,7 +470,6 @@ run_thread:
       } else {
         ret = ThreadFinished;
       }
-      
     }
     case ThreadKilled:
         /* Thread already finished, return to scheduler. */
@@ -495,6 +494,12 @@ run_thread:
     case ThreadBusyWait:
     {
       ret = ThreadBusyWait;
+      break;
+    }
+
+    case ThreadSuspend:
+    {
+      ret = ThreadSuspend;
       break;
     }
 
@@ -530,6 +535,7 @@ run_thread:
             traceEventStopThread(cap, t, t->why_blocked + 6, 0);
         }
     } else {
+        debugTrace(DEBUG_sched, "DERP");
         traceEventStopThread(cap, t, ret, 0);
     }
 
@@ -563,6 +569,19 @@ run_thread:
     case ThreadBusyWait:
     {
       scheduleHandleYield(cap, t, prev_what_next, task);
+      break;
+    }
+    case ThreadSuspend:
+    {
+      debugTrace(DEBUG_sched, "Suspend ticks left for tso %d (%d)", t->id, t->suspendTicks)
+      if (t->suspendTicks < 1) {
+        debugTrace(DEBUG_sched, "Jumping back into haskell");
+        t->what_next = ThreadRunGHC;
+      } else {
+        t->what_next = ThreadSuspend;
+      }
+      //pushOnRunQueue(cap, t);
+      scheduleHandleYield(cap, t, ThreadSuspend, task);
       break;
     }
     case ThreadYielding:
@@ -633,6 +652,11 @@ void
 contextSwitchHThread(Capability *cap, StgTSO *tso)
 {
   debugTrace(DEBUG_sched, "HCS: %d", tso->id);
+  debugTrace(DEBUG_sched, "Children: %p", tso->children);
+  if (tso->ticks_remaining < 0) {
+    barf("TSO %d went into the negative (%d/%d)",
+      tso->id, tso->ticks_remaining, tso->ticks);
+  }
   tso->ticks_remaining = tso->ticks;
   //if (tso->parent == NULL || tso->parent == END_TSO_QUEUE) return;
   if (tso->children != NULL) {
@@ -1205,6 +1229,11 @@ scheduleHandleHeapOverflow( Capability *cap, StgTSO *t )
           "Context switching tso %d (%d/%d). Reason: Heap overflow",
           t->id, t->ticks_remaining, t->ticks);
         appendToRunQueue(cap,t);
+    } else if (t->ticks != 0 && t->ticks_remaining < 1) {
+      debugTrace(DEBUG_sched,
+          "Context switching tso %d (%d/%d). Reason: Heap overflow",
+          t->id, t->ticks_remaining, t->ticks);
+      contextSwitchHThread(cap, t);
     } else {
         pushOnRunQueue(cap,t);
     }
@@ -1301,13 +1330,17 @@ scheduleHandleYield( Capability *cap, StgTSO *t, uint32_t prev_what_next, Task *
      */
 
     ASSERT(t->_link == END_TSO_QUEUE);
-
+    debugTrace(DEBUG_sched, "pwn = %d, twn = %d", prev_what_next, t->what_next);
+    
     // Shortcut if we're just switching evaluators: just run the thread.  See
     // Note [avoiding threadPaused] in Interpreter.c.
     if (t->what_next != prev_what_next) {
       if (t->what_next == ThreadKilled) {
         debugTrace(DEBUG_sched, "Thread %d was recently killed", t->id);
         scheduleHandleThreadFinished(cap, task, t);
+      } else if (prev_what_next == ThreadSuspend && t->what_next == ThreadRunGHC) {
+        debugTrace(DEBUG_sched, "PUSHING ON RUN QUEUE");
+        pushOnRunQueue(cap, t);
       } else {
         debugTrace(DEBUG_sched,
                    "--<< thread %ld (%s) stopped to switch evaluators",
@@ -1322,7 +1355,7 @@ scheduleHandleYield( Capability *cap, StgTSO *t, uint32_t prev_what_next, Task *
     // the CPU because the tick always arrives during GC).  This way
     // penalises threads that do a lot of allocation, but that seems
     // better than the alternative.
-    if (t->ticks != 0 && t->ticks_remaining < 1) {
+    else if (t->ticks != 0 && t->ticks_remaining < 1) {
       cap->context_switch = 0;
       debugTrace(DEBUG_sched,
             "Context switching tso %d (%d/%d). Reason: Yield",

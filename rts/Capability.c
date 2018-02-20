@@ -464,9 +464,15 @@ void interruptAllCapabilities(void)
 void
 capabilityHandleTick(Capability *cap)
 {
-  StgTSO *t = cap->run_queue_hd;
-  if (t != END_TSO_QUEUE && t->ticks != 0) {
+  StgTSO *t = cap->r.rCurrentTSO;
+  if (t == NULL) {
+    t = cap->run_queue_hd;
+  }
+  if (t != END_TSO_QUEUE && t != NULL && t->ticks != 0) {
     t->ticks_remaining--;
+  }
+  if (t != END_TSO_QUEUE && t != NULL && t->suspendTicks > 0) {
+    t->suspendTicks--;
   }
 }
 

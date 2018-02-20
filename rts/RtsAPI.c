@@ -418,6 +418,9 @@ createHIOThread (Capability *cap, StgTSO *parent, W_ ticks, W_ stack_size,  StgC
   } else {
     cap->hrun_queue = t;
   }
+  debugTrace(DEBUG_sched, "TSO %d is an hthread", t->id);
+  debugTrace(DEBUG_sched, "Parent is %d", parent->id);
+  debugTrace(DEBUG_sched, "Children is %p", parent->children);
   pushClosure(t, (W_)&stg_ap_v_info);
   pushClosure(t, (W_)closure);
   pushClosure(t, (W_)&stg_enter_info);

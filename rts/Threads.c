@@ -160,6 +160,7 @@ createThread(Capability *cap, W_ size)
     tso->parent = NULL;
     tso->hlink = NULL;
     tso->children = NULL;
+    tso->suspendTicks = 0;
 
     return tso;
 }

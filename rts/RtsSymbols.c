@@ -583,6 +583,7 @@
       SymI_HasProto(dirty_TVAR)                                         \
       SymI_HasProto(stg_forkzh)                                         \
       SymI_HasProto(stg_hForkzh)                                        \
+      SymI_HasProto(stg_tickDelayzh)                                    \
       SymI_HasProto(stg_forkOnzh)                                       \
       SymI_HasProto(forkProcess)                                        \
       SymI_HasProto(forkOS_createThread)                                \

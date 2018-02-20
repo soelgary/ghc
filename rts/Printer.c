@@ -801,7 +801,8 @@ const char *what_next_strs[] = {
   [ThreadInterpret] = "ThreadInterpret",
   [ThreadKilled]    = "ThreadKilled",
   [ThreadComplete]  = "ThreadComplete",
-  [ThreadBusyWait]  = "ThreadBusyWait"
+  [ThreadBusyWait]  = "ThreadBusyWait",
+  [ThreadSuspend]   = "ThreadSuspend"
 };
 
 #else /* DEBUG */

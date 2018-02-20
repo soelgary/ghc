@@ -54,6 +54,7 @@ module Control.Concurrent (
         addTime,
         releaseTime,
         getTime,
+        tickDelay,
 
         -- * Scheduling
 

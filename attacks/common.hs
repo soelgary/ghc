@@ -72,8 +72,7 @@ lForkPC cap p l (LIOTCB action) = do
   mv <- ioTCB IO.newEmptyMVar
   st <- ioTCB $ newIORef LResEmpty
   s0 <- getLIOStateTCB
-  () <- ioTCB $ IO.releaseTime 4
-  tid <- ioTCB $ IO.mask $ \unmask -> IO.hForkOn cap 4 $ do
+  tid <- ioTCB $ IO.mask $ \unmask -> IO.hForkOn cap 2 $ do
     sp <- newIORef s0
     ea <- IO.try $ unmask $ action sp
     LIOState lEnd _ <- readIORef sp
@@ -91,9 +90,9 @@ TODO: Handle exceptions
 TODO: Reclaim resources accordingly
 -}
 hKill :: Label l => LabeledResult l a -> Int -> Int -> String -> LIO l ()
-hKill (LabeledResultTCB tid _ _ _) microseconds cap msg = do
-  () <- ioTCB $ IO.threadDelay microseconds
-  () <- ioTCB $ print $ "Killing...." ++ msg
+hKill (LabeledResultTCB tid _ _ _) ticks cap msg = do
+  () <- ioTCB $ IO.tickDelay ticks
+  --() <- ioTCB $ print $ "Killing...." ++ msg
   () <- ioTCB $ IO.forceOnQueue tid
   --() <- ioTCB $ print "Done waiting...."
   ticks <- ioTCB $ IO.hKillThread tid
@@ -103,9 +102,10 @@ hKill (LabeledResultTCB tid _ _ _) microseconds cap msg = do
   return ()
 
 hKill' :: Label l => LabeledResult l a -> Int -> Int -> LIO l ()
-hKill' (LabeledResultTCB tid _ _ _) microseconds cap = do
-  () <- ioTCB $ IO.threadDelay microseconds
-  () <- ioTCB $ print "Killing....!!!"
+hKill' (LabeledResultTCB tid _ _ _) ticks cap = do
+  --() <- ioTCB $ IO.threadDelay 1000000
+  () <- ioTCB $ IO.tickDelay ticks
+  --() <- ioTCB $ print "Killing....!!!"
   --() <- ioTCB $ print "Done waiting...."
   ticks <- ioTCB $ IO.hKillThread tid
   --() <- ioTCB $ print "Killed...."

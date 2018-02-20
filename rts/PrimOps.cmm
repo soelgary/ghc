@@ -2487,3 +2487,14 @@ stg_traceMarkerzh ( W_ msg )
     return ();
 }
 
+// Temporary busy wait -- this is an alternative to IO.threadDeley to be used
+// used in the hierarchical scheduler. It allows a thread to delay execution for
+// a given number of ticks that they execute.
+stg_tickDelayzh (W_ ticks)
+{
+  StgTSO_what_next(CurrentTSO) = ThreadSuspend::I16;
+  StgTSO_suspendTicks(CurrentTSO) = ticks;
+  StgRegTable_rRet(BaseReg) = ThreadYielding;
+  R1 = BaseReg;
+  jump stg_returnToSched [R1];
+}

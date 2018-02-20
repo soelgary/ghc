@@ -428,6 +428,7 @@ RTS_FUN_DECL(stg_compactSizzezh);
 RTS_FUN_DECL(stg_forkzh);
 RTS_FUN_DECL(stg_forkOnzh);
 RTS_FUN_DECL(stg_hForkzh);
+RTS_FUN_DECL(stg_tickDelayzh);
 RTS_FUN_DECL(stg_yieldzh);
 RTS_FUN_DECL(stg_killMyself);
 RTS_FUN_DECL(stg_killThreadzh);

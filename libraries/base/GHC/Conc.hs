@@ -53,6 +53,7 @@ module GHC.Conc
         , addTime
         , releaseTime
         , getTime
+        , tickDelay
 
         , ThreadStatus(..), BlockReason(..)
         , threadStatus
