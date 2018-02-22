@@ -405,12 +405,17 @@ createIOThread (Capability *cap, W_ stack_size,  StgClosure *closure)
 }
 
 StgTSO *
-createHIOThread (Capability *cap, StgTSO *parent, W_ ticks, W_ stack_size,  StgClosure *closure)
+createHIOThread (Capability *cap, StgTSO *parent, W_ ticks,
+                 W_ timeout, W_ stack_size,  StgClosure *closure)
 {
   StgTSO *t;
   t = createThread (cap, stack_size);
   t->ticks = ticks;
   t->ticks_remaining = ticks;
+  if (timeout > 0) {
+    t->has_timeout = 1;
+  }
+  t->timeout = timeout;
   if (parent->ticks != 0) {
     t->parent = parent;
     t->hlink = parent->children;

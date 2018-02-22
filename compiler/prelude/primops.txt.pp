@@ -2319,7 +2319,7 @@ primop  ForkOnOp "forkOn#" GenPrimOp
    out_of_line      = True
 
 primop  HForkOnOp "hFork#" GenPrimOp
-   Int# -> Int# -> a -> State# RealWorld -> (# State# RealWorld, ThreadId# #)
+   Int# -> Int# -> Int# -> a -> State# RealWorld -> (# State# RealWorld, ThreadId# #)
    with
    has_side_effects = True
    out_of_line      = True

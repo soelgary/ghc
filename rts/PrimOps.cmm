@@ -874,7 +874,7 @@ stg_forkzh ( gcptr closure )
     return (threadid);
 }
 
-stg_hForkzh ( W_ cpu, W_ ticks, gcptr closure )
+stg_hForkzh ( W_ cpu, W_ ticks, W_ timeout, gcptr closure )
 {
 again: MAYBE_GC(again);
 
@@ -884,6 +884,7 @@ again: MAYBE_GC(again);
         MyCapability() "ptr",
         CurrentTSO "ptr",
         ticks,
+        timeout,
         RtsFlags_GcFlags_initialStkSize(RtsFlags),
         closure "ptr");
 

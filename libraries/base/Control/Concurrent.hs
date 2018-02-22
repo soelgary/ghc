@@ -46,6 +46,7 @@ module Control.Concurrent (
         forkOn,
         hForkOn,
         forkOnWithUnmask,
+        hForkOnWithUnmask,
         getNumCapabilities,
         setNumCapabilities,
         threadCapability,

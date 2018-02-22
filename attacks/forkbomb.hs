@@ -36,6 +36,8 @@ import Control.Concurrent
 
 import Common
 
+import Data.Typeable
+
 len = 100000
 
 highThread :: DC (DCLabeled Int) -> DC Int
@@ -89,8 +91,8 @@ mainDC secret = do
   l <- getLabel
   let cap1 = 1
   let cap2 = 2
-  t2 <- hFork 1 100 secretL (highThread secret)
-  t1 <- hFork 0 100 publicL (runLowThreads publicChannel)
+  t2 <- hFork 1 1000 secretL (highThread secret)
+  t1 <- hFork 0 1000 publicL (runLowThreads publicChannel)
   r2 <- hKill' t2 800 1
   r1 <- hKill' t1 0 0
   analyzePublicChannel publicChannel

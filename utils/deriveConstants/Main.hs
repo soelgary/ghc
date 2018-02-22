@@ -449,6 +449,7 @@ wanteds os = concat
           ,closureField  C    "StgTSO"      "dirty"
           ,closureField  C    "StgTSO"      "bq"
           ,closureField  C    "StgTSO"      "suspendTicks"
+          ,closureField  C    "StgTSO"      "ticks"
           ,closureField  Both "StgTSO"      "alloc_limit"
           ,closureField_ Both "StgTSO_cccs" "StgTSO" "prof.cccs"
           ,closureField  Both "StgTSO"      "stackobj"

@@ -180,8 +180,10 @@ typedef struct StgTSO_ {
      * will run for (or give up). Ticks remaining is a countdown until it
      * gets context switched.
      */
-    StgInt64 ticks;
-    StgInt64 ticks_remaining;
+    StgInt64 ticks; /* The number of ticks this TSO will run for when scheduled */
+    StgInt64 ticks_remaining; /* Ticks until the TSO will context switch */
+    StgInt64 timeout; /* Ticks until this thread times out */
+    StgBool has_timeout;
     StgTSO *children;
     StgTSO *hlink;
     StgTSO *parent;

@@ -333,7 +333,11 @@ stg_killMyself
     P_ target, exception;
     target = R1;
     exception = R2;
-
+    
+    // If an hthread is killing itself, it will only busy wait until it has
+    // relinquished all of its ticks.
+    StgTSO_ticks(CurrentTSO) = 0;
+    
     SAVE_THREAD_STATE();
     /* ToDo: what if the current thread is masking exceptions? */
     ccall throwToSingleThreaded(MyCapability() "ptr",

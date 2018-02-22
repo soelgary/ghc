@@ -40,6 +40,7 @@ module GHC.Conc.Sync
         , forkOn
         , forkOnWithUnmask
         , hForkOn
+        , hForkOnWithUnmask
         , tickDelay
         , numCapabilities
         , getNumCapabilities
@@ -356,13 +357,17 @@ scheduler. The hierarchical scheduler will schedule threads for a fixed amount
 of time (specified in `ticks`). The thread will be scheduled, even if
 terminated, until it is killed.
 -}
-hForkOn :: Int -> Int -> IO () -> IO ThreadId
-hForkOn (I# cpu) (I# ticks) action = IO $ \ s ->
-   case (hFork# cpu ticks action_plus s) of (# s1, tid #) -> (# s1, ThreadId tid #)
+hForkOn :: Int -> Int -> Int -> IO () -> IO ThreadId
+hForkOn (I# cpu) (I# ticks) (I# timeout) action = IO $ \ s ->
+   case (hFork# cpu ticks timeout action_plus s) of (# s1, tid #) -> (# s1, ThreadId tid #)
  where
   -- We must use 'catch' rather than 'catchException' because the action
   -- could be bottom. #13330
   action_plus = catch action childHandler
+
+-- | Like 'forkOnWithUnmask', but the created thread is hierarchical
+hForkOnWithUnmask :: Int -> Int -> Int -> ((forall a . IO a -> IO a) -> IO ()) -> IO ThreadId
+hForkOnWithUnmask cpu ticks timeout io = hForkOn cpu ticks timeout (io unsafeUnmask)
 
 tickDelay :: Int -> IO ()
 tickDelay (I# ticks) = IO $ \ s ->

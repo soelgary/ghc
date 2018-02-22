@@ -73,7 +73,7 @@ lForkPC cap ticks p l (LIOTCB action) = do
   mv <- ioTCB IO.newEmptyMVar
   st <- ioTCB $ newIORef LResEmpty
   s0 <- getLIOStateTCB
-  tid <- ioTCB $ IO.mask $ \unmask -> IO.hForkOn cap ticks $ do
+  tid <- ioTCB $ IO.mask $ \unmask -> IO.hForkOn cap ticks 500 $ do
     sp <- newIORef s0
     ea <- IO.try $ unmask $ action sp
     LIOState lEnd _ <- readIORef sp

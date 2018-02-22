@@ -404,11 +404,18 @@ run_thread:
 
     // Process the ticks
     if (t->suspendTicks > 0) {
-      t->suspendTicks-= cap->unprocessed_ticks;
+      t->suspendTicks -= cap->unprocessed_ticks;
     }
     if (t->ticks != 0) {
       t->ticks_remaining -= cap->unprocessed_ticks;
-      if (t->ticks_remaining < TICK_THRESHOLD) {
+      if (t->has_timeout) {
+        t->timeout -= cap->unprocessed_ticks;
+      }
+      if (t->has_timeout && t->timeout < 1) {
+        debugTrace(DEBUG_sched, "H thread %d has timed out", t->id);
+        t->ticks = 0;
+        t->what_next = ThreadKilled;
+      } else if (t->ticks_remaining < TICK_THRESHOLD) {
         contextSwitchHThread(cap, t);
         goto pop_thread;
       }
