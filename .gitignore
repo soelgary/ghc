@@ -192,3 +192,7 @@ GIT_COMMIT_ID
 
 # Should be equal to testdir_suffix from testsuite/driver/testlib.py.
 *.run
+
+# Misc
+/web/node_modules
+
