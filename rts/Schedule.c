@@ -413,6 +413,10 @@ run_thread:
       }
       if (t->has_timeout && t->timeout < 1) {
         debugTrace(DEBUG_sched, "H thread %d has timed out", t->id);
+        // Pass the ticks back to the parent
+        if (t->parent != NULL) {
+          t->parent->ticks += t->ticks;
+        }
         t->ticks = 0;
         t->what_next = ThreadKilled;
       } else if (t->ticks_remaining < TICK_THRESHOLD) {
@@ -524,8 +528,14 @@ run_thread:
       break;
     }
 
+    case ThreadBlockedWait:
+    {
+      ret = ThreadBlocked;
+      break;
+    }
+
     default:
-        barf("schedule: invalid what_next field");
+        barf("schedule: invalid what_next field %d", prev_what_next);
     }
 
     cap->in_haskell = false;
@@ -613,7 +623,12 @@ run_thread:
         break;
 
     case ThreadBlocked:
-        scheduleHandleThreadBlocked(t);
+        if (t->ticks != 0) {
+          debugTrace(DEBUG_sched, "H thread is blocked. Suspending for rest of time slice: %d ticks", t->ticks_remaining);
+          t->suspendTicks = t->ticks_remaining;
+          t->what_next = ThreadBlockedWait;
+          scheduleHandleYield(cap, t, ThreadBlockedWait, task);
+        }
         break;
 
     case ThreadFinished:
@@ -1375,6 +1390,24 @@ scheduleHandleYield( Capability *cap, StgTSO *t, uint32_t prev_what_next, Task *
         return true;
       }
     }
+
+    // Thread is blocked. Put it back on the run queue if time is not up
+    else if (prev_what_next == ThreadBlockedWait &&
+             t->what_next == ThreadBlockedWait &&
+             t->ticks != 0) {
+        debugTrace(DEBUG_sched, "hthread %d is blocked", t->id);
+        if (t->ticks_remaining > 0) {
+          pushOnRunQueue(cap,t);
+        } else {
+          contextSwitchHThread(cap, t);
+        }
+
+        // Is the thread still blocked? If not, change t->what.
+        if (t->_blink == END_TSO_QUEUE || t->_blink == NULL) {
+          debugTrace(DEBUG_sched, "hthread %d is no longer blocked", t->id);
+          t->what_next = ThreadRunGHC;
+        }
+      }
 
     // Reset the context switch flag.  We don't do this just before
     // running the thread, because that would mean we would lose ticks

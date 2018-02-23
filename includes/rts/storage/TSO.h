@@ -189,6 +189,12 @@ typedef struct StgTSO_ {
     StgTSO *parent;
     StgInt64 suspendTicks;
 
+    // Used to point to an mvar when this thread is blocked. This changes the
+    // old rts in that _link used to point to the mvar. We need this so that
+    // we can append blocked threads to the end of the run queue, even though
+    // they wont run (just block)
+    StgTSO *_blink;
+
 #ifdef TICKY_TICKY
     /* TICKY-specific stuff would go here. */
 #endif

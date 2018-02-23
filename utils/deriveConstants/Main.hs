@@ -436,6 +436,7 @@ wanteds os = concat
           ,closurePayload C    "StgArrBytes" "payload"
 
           ,closureField  C    "StgTSO"      "_link"
+          ,closureField  C    "StgTSO"      "_blink"
           ,closureField  C    "StgTSO"      "global_link"
           ,closureField  C    "StgTSO"      "what_next"
           ,closureField  C    "StgTSO"      "why_blocked"

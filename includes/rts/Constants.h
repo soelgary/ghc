@@ -211,6 +211,7 @@
 #define ThreadComplete  4       /* thread has finished */
 #define ThreadBusyWait  26      /* thread has finished, but must be scheduled */
 #define ThreadSuspend   27      /* thread must suspend for a while */
+#define ThreadBlockedWait 28    /* thread is blocked, but still scheduled */
 
 /* If the number of remaining ticks is less than this, then context switch */
 #define TICK_THRESHOLD  10

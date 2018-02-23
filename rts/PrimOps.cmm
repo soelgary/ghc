@@ -1543,7 +1543,7 @@ stg_takeMVarzh ( P_ mvar /* :: MVar a */ )
             ccall recordClosureMutated(MyCapability() "ptr",
                                              StgMVar_tail(mvar));
         }
-        StgTSO__link(CurrentTSO)       = q;
+        StgTSO__blink(CurrentTSO)       = q;
         StgTSO_block_info(CurrentTSO)  = mvar;
         StgTSO_why_blocked(CurrentTSO) = BlockedOnMVar::I16;
         StgMVar_tail(mvar)             = q;
@@ -1591,7 +1591,7 @@ loop:
     PerformPut(stack, StgMVar_value(mvar));
 
     // indicate that the MVar operation has now completed.
-    StgTSO__link(tso) = stg_END_TSO_QUEUE_closure;
+    StgTSO__blink(tso) = stg_END_TSO_QUEUE_closure;
 
     // no need to mark the TSO dirty, we have only written END_TSO_QUEUE.
 
@@ -1657,7 +1657,7 @@ loop:
     PerformPut(stack, StgMVar_value(mvar));
 
     // indicate that the MVar operation has now completed.
-    StgTSO__link(tso) = stg_END_TSO_QUEUE_closure;
+    StgTSO__blink(tso) = stg_END_TSO_QUEUE_closure;
 
     // no need to mark the TSO dirty, we have only written END_TSO_QUEUE.
 
@@ -1701,7 +1701,7 @@ stg_putMVarzh ( P_ mvar, /* :: MVar a */
             ccall recordClosureMutated(MyCapability() "ptr",
                                              StgMVar_tail(mvar));
         }
-        StgTSO__link(CurrentTSO)       = q;
+        StgTSO__blink(CurrentTSO)       = q;
         StgTSO_block_info(CurrentTSO)  = mvar;
         StgTSO_why_blocked(CurrentTSO) = BlockedOnMVar::I16;
         StgMVar_tail(mvar)             = q;
@@ -1734,7 +1734,7 @@ loop:
         StgMVar_tail(mvar) = stg_END_TSO_QUEUE_closure;
     }
 
-    ASSERT(StgTSO_block_info(tso) == mvar);
+    //ASSERT(StgTSO_block_info(tso) == mvar);
     // save why_blocked here, because waking up the thread destroys
     // this information
     W_ why_blocked;
@@ -1746,7 +1746,7 @@ loop:
     PerformTake(stack, val);
 
     // indicate that the MVar operation has now completed.
-    StgTSO__link(tso) = stg_END_TSO_QUEUE_closure;
+    StgTSO__blink(tso) = stg_END_TSO_QUEUE_closure;
 
     if (TO_W_(StgStack_dirty(stack)) == 0) {
         ccall dirty_STACK(MyCapability() "ptr", stack "ptr");
@@ -1761,7 +1761,7 @@ loop:
         goto loop;
     }
 
-    ASSERT(why_blocked == BlockedOnMVar);
+    //ASSERT(why_blocked == BlockedOnMVar);
 
     unlockClosure(mvar, info);
     return ();
@@ -1827,7 +1827,7 @@ loop:
     PerformTake(stack, val);
 
     // indicate that the MVar operation has now completed.
-    StgTSO__link(tso) = stg_END_TSO_QUEUE_closure;
+    StgTSO__blink(tso) = stg_END_TSO_QUEUE_closure;
 
     if (TO_W_(StgStack_dirty(stack)) == 0) {
         ccall dirty_STACK(MyCapability() "ptr", stack "ptr");
@@ -1877,7 +1877,7 @@ stg_readMVarzh ( P_ mvar, /* :: MVar a */ )
         StgMVarTSOQueue_link(q) = StgMVar_head(mvar);
         StgMVarTSOQueue_tso(q)  = CurrentTSO;
 
-        StgTSO__link(CurrentTSO)       = q;
+        StgTSO__blink(CurrentTSO)       = q;
         StgTSO_block_info(CurrentTSO)  = mvar;
         StgTSO_why_blocked(CurrentTSO) = BlockedOnMVarRead::I16;
         StgMVar_head(mvar) = q;
