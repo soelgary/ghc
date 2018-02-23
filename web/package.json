@@ -1,0 +1,13 @@
+{
+  "name": "stress",
+  "version": "0.0.1",
+  "description": "Stress tests",
+  "author": "Gary Soeller",
+  "dependencies": {
+    "autocannon": "^0.16.5",
+    "commander": "^2.11.0"
+  },
+  "devDependencies": {},
+  "private": true,
+  "license": "UNLICENSED"
+}
