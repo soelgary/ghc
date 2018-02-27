@@ -1,0 +1,14 @@
+#!/bin/bash
+
+echo "Building and installing warp...."
+../ghc/inplace/bin/ghc-stage2 --make Setup.lhs
+./Setup configure --with-compiler=/home/gary/dev/src/ghc/inplace/bin/ghc-stage2 --global
+./Setup build
+./Setup register --inplace
+echo "Done"
+echo "Building and installing frankie"
+../ghc/inplace/bin/ghc-stage2 --make ../LIO/lio-http-server/Setup.hs
+../LIO/lio-http-server/Setup configure --with-compiler=/home/gary/dev/src/ghc/inplace/bin/ghc-stage2 --global
+../LIO/lio-http-server/Setup build
+../LIO/lio-http-server/Setup register --inplace
+echo "Done"
