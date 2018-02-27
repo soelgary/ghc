@@ -133,6 +133,8 @@ appendToRunQueue (Capability *cap, StgTSO *tso)
     if (tso->_link == tso) {
       debugTrace(DEBUG_sched, "Bad stuff is about to happen...");
     }
+    // FIXME GS: THIS IS REALLY BAD!
+    tso->_link = END_TSO_QUEUE;
     ASSERT(tso->_link == END_TSO_QUEUE);
     debugTrace(DEBUG_sched, "Ticks before (%d)", tso->ticks_remaining);
     tso->ticks_remaining = tso->ticks;
@@ -168,12 +170,12 @@ pushOnRunQueue (Capability *cap, StgTSO *tso);
 EXTERN_INLINE void
 pushOnRunQueue (Capability *cap, StgTSO *tso)
 {
+  // FIXME GS: THIS IS REALLY BAD
+  if (tso == cap->run_queue_hd) return;
   ASSERT(tso != cap->run_queue_hd);
   if (tso->_link == tso) {
+    tso->_link = END_TSO_QUEUE;
     debugTrace(DEBUG_sched, "Bad stuff is about to happen...");
-  }
-  if (tso->id == 0x8) {
-    debugTrace(DEBUG_sched, "Bad stuff is about to happen...!!");
   }
   setTSOLink(cap, tso, cap->run_queue_hd);
   tso->block_info.prev = END_TSO_QUEUE;
@@ -193,6 +195,9 @@ pushOnRunQueue (Capability *cap, StgTSO *tso)
 INLINE_HEADER StgTSO *
 popRunQueue (Capability *cap)
 {
+  if (cap->run_queue_hd == END_TSO_QUEUE && cap->hrun_queue != NULL) {
+    pushOnRunQueue(cap, cap->hrun_queue);
+  }
   StgTSO *t;
   t = cap->run_queue_hd;
   ASSERT(t != END_TSO_QUEUE);

@@ -405,10 +405,12 @@ createIOThread (Capability *cap, W_ stack_size,  StgClosure *closure)
 }
 
 StgTSO *
-createHIOThread (Capability *cap, StgTSO *parent, W_ ticks,
+createHIOThread (W_ cpu, StgTSO *parent, W_ ticks,
                  W_ timeout, W_ stack_size,  StgClosure *closure)
 {
   StgTSO *t;
+  cpu %= enabled_capabilities;
+  Capability *cap = capabilities[cpu];
   t = createThread (cap, stack_size);
   t->ticks = ticks;
   t->ticks_remaining = ticks;

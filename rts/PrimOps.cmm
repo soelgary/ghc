@@ -881,7 +881,7 @@ again: MAYBE_GC(again);
     gcptr threadid;
 
     ("ptr" threadid) = ccall createHIOThread(
-        MyCapability() "ptr",
+        cpu,
         CurrentTSO "ptr",
         ticks,
         timeout,

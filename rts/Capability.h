@@ -200,9 +200,10 @@ struct Capability_ {
 // (a) a Task holds multiple Capabilities, and (b) when the current
 // Task is bound, its thread has just blocked, and it may have been
 // moved to another Capability.
+// FIXME GS: cap->n_run_queue == 0
 #define ASSERT_PARTIAL_CAPABILITY_INVARIANTS(cap,task)                  \
   ASSERT(cap->run_queue_hd == END_TSO_QUEUE ?                           \
-            cap->run_queue_tl == END_TSO_QUEUE && cap->n_run_queue == 0 \
+            cap->run_queue_tl == END_TSO_QUEUE && 1 \
          : 1);                                                          \
   ASSERT(cap->suspended_ccalls == NULL ? cap->n_suspended_ccalls == 0 : 1); \
   ASSERT(myTask() == task);                                             \

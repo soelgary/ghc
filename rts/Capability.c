@@ -571,7 +571,9 @@ releaseCapability_ (Capability* cap,
 
     // If the next thread on the run queue is a bound thread,
     // give this Capability to the appropriate Task.
-    if (!emptyRunQueue(cap) && peekRunQueue(cap)->bound) {
+    if (!emptyRunQueue(cap) &&
+        cap->run_queue_hd != END_TSO_QUEUE &&
+        peekRunQueue(cap)->bound) {
         // Make sure we're not about to try to wake ourselves up
         // ASSERT(task != cap->run_queue_hd->bound);
         // assertion is false: in schedule() we force a yield after
@@ -605,6 +607,13 @@ releaseCapability_ (Capability* cap,
             // The worker Task pops itself from the queue;
             return;
         }
+    }
+
+    if (cap->hrun_queue != END_TSO_QUEUE &&
+        cap->hrun_queue != NULL &&
+        cap->hrun_queue->bound != NULL) {
+      giveCapabilityToTask(cap, cap->hrun_queue->bound->task);
+      return;
     }
 
 #ifdef PROFILING

@@ -412,10 +412,12 @@ run_thread:
         t->timeout -= cap->unprocessed_ticks;
       }
       if (t->has_timeout && t->timeout < 1) {
+        debugTrace(DEBUG_sched, "Parent has %d ticks (before)", t->parent->ticks);
         debugTrace(DEBUG_sched, "H thread %d has timed out", t->id);
         // Pass the ticks back to the parent
         if (t->parent != NULL) {
           t->parent->ticks += t->ticks;
+          debugTrace(DEBUG_sched, "Parent has %d ticks (after)", t->parent->ticks);
         }
         t->ticks = 0;
         t->what_next = ThreadKilled;
