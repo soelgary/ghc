@@ -38,6 +38,8 @@ module GHC.Conc.Sync
         , forkIO
         , forkIOWithUnmask
         , forkOn
+        , hForkOnWithUnmask
+        , hForkOn
         , forkOnWithUnmask
         , numCapabilities
         , getNumCapabilities
@@ -340,6 +342,25 @@ forkOn (I# cpu) action = IO $ \ s ->
 -- @since 4.4.0.0
 forkOnWithUnmask :: Int -> ((forall a . IO a -> IO a) -> IO ()) -> IO ThreadId
 forkOnWithUnmask cpu io = forkOn cpu (io unsafeUnmask)
+
+{- |
+Like 'forkOn', but will use the hierarchical scheduler rather than the normal
+scheduler. The hierarchical scheduler will schedule threads for a fixed amount
+of time (specified in `ticks`). The thread will be scheduled, even if
+terminated, until it is killed.
+-}
+hForkOn :: Int -> Int -> Int -> IO () -> IO ThreadId
+hForkOn (I# cpu) (I# ticks) (I# timeout) action = IO $ \ s ->
+   case (hFork# cpu ticks timeout action_plus s) of (# s1, tid #) -> (# s1, ThreadId tid #)
+ where
+  -- We must use 'catch' rather than 'catchException' because the action
+  -- could be bottom. #13330
+  action_plus = catch action childHandler
+
+-- | Like 'forkOnWithUnmask', but the created thread is hierarchical
+hForkOnWithUnmask :: Int -> Int -> Int -> ((forall a . IO a -> IO a) -> IO ()) -> IO ThreadId
+hForkOnWithUnmask cpu ticks timeout io = hForkOn cpu ticks timeout (io unsafeUnmask)
+
 
 -- | the value passed to the @+RTS -N@ flag.  This is the number of
 -- Haskell threads that can run truly simultaneously at any given

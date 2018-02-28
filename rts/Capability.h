@@ -113,6 +113,8 @@ struct Capability_ {
     // See [Note allocation accounting] in Storage.c
     W_ total_allocated;
 
+    StgTSO *hrun_queue;
+
 #if defined(THREADED_RTS)
     // Worker Tasks waiting in the wings.  Singly-linked.
     Task *spare_workers;

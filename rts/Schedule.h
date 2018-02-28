@@ -32,6 +32,7 @@ void scheduleThread (Capability *cap, StgTSO *tso);
 // (cap is the currently owned Capability, cpu is the number of
 // the desired Capability).
 void scheduleThreadOn(Capability *cap, StgWord cpu, StgTSO *tso);
+void scheduleHThreadOn(Capability *cap, StgWord cpu, StgTSO *tso);
 
 /* wakeUpRts()
  *

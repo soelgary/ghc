@@ -132,6 +132,10 @@ createThread(Capability *cap, W_ size)
     // ToDo: report the stack size in the event?
     traceEventCreateThread(cap, tso);
 
+    tso->parent = NULL;
+    tso->hlink = NULL;
+    tso->children = NULL;
+
     return tso;
 }
 

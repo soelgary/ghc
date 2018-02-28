@@ -32,6 +32,8 @@ StgTSO *createGenThread       (Capability *cap, W_ stack_size,
                                StgClosure *closure);
 StgTSO *createIOThread        (Capability *cap, W_ stack_size,
                                StgClosure *closure);
+StgTSO *createHIOThread       (Capability *cap, StgTSO *parent, W_ cpu,
+                               W_ stack_size, StgClosure *closure);
 StgTSO *createStrictIOThread  (Capability *cap, W_ stack_size,
                                StgClosure *closure);
 

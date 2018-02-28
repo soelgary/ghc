@@ -30,6 +30,8 @@ module GHC.Conc
         , forkIOWithUnmask
         , forkOn
         , forkOnWithUnmask
+        , hForkOn
+        , hForkOnWithUnmask
         , numCapabilities
         , getNumCapabilities
         , setNumCapabilities

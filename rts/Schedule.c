@@ -278,7 +278,7 @@ schedule (Capability *initialCapability, Task *task)
 
     /* work pushing, currently relevant only for THREADED_RTS:
        (pushes threads, wakes up idle capabilities for stealing) */
-    schedulePushWork(cap,task);
+    //schedulePushWork(cap,task);
 
     scheduleDetectDeadlock(&cap,task);
 
@@ -313,10 +313,15 @@ schedule (Capability *initialCapability, Task *task)
     }
 #endif
 
+    ASSERT(cap->hrun_queue == NULL || cap->run_queue_hd == END_TSO_QUEUE);
     //
     // Get a thread to run
     //
-    t = popRunQueue(cap);
+    if (cap->hrun_queue != NULL) {
+      t = popHRunQueue(cap);
+    } else {
+      t = popRunQueue(cap);
+    }
 
     // Sanity check the thread we're about to run.  This can be
     // expensive if there is lots of thread switching going on...
@@ -2503,6 +2508,17 @@ scheduleThread(Capability *cap, StgTSO *tso)
     // The thread goes at the *end* of the run-queue, to avoid possible
     // starvation of any threads already on the queue.
     appendToRunQueue(cap,tso);
+}
+
+void
+scheduleHThreadOn(Capability *cap, StgWord cpu USED_IF_THREADS, StgTSO *tso)
+{
+  tso->flags |= TSO_LOCKED;
+  cpu %= enabled_capabilities;
+  Capability *to = capabilities[cpu];
+  if (to->hrun_queue == NULL) {
+    to->hrun_queue = tso;
+  }
 }
 
 void

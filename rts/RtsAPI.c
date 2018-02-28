@@ -404,6 +404,29 @@ createIOThread (Capability *cap, W_ stack_size,  StgClosure *closure)
   return t;
 }
 
+StgTSO *
+createHIOThread (Capability *cap, StgTSO *parent, W_ cpu,
+                 W_ stack_size,  StgClosure *closure)
+{
+  StgTSO *t;
+  t = createThread (cap, stack_size);
+
+  if (cap->no == cpu) {
+    // Child is scheduled on the same capability as parent. Set the parent/child
+    // relationships
+    t->parent = parent;
+    t->hlink = parent->children;
+  }
+
+  debugTrace(DEBUG_sched, "TSO %d is an hthread", t->id);
+  debugTrace(DEBUG_sched, "Parent is %d", parent->id);
+  debugTrace(DEBUG_sched, "Children is %p", parent->children);
+  pushClosure(t, (W_)&stg_ap_v_info);
+  pushClosure(t, (W_)closure);
+  pushClosure(t, (W_)&stg_enter_info);
+  return t;
+}
+
 /*
  * Same as above, but also evaluate the result of the IO action
  * to whnf while we're at it.

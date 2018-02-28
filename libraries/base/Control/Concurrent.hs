@@ -43,6 +43,8 @@ module Control.Concurrent (
         -- ** Threads with affinity
         forkOn,
         forkOnWithUnmask,
+        hForkOn,
+        hForkOnWithUnmask,
         getNumCapabilities,
         setNumCapabilities,
         threadCapability,
