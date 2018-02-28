@@ -185,6 +185,7 @@ void startSignalHandlers(Capability *cap)
         stg_pending_events--;
         scheduleThread(cap,
             createIOThread(cap,
+                cap->hrun_queue_top,
                 RtsFlags.GcFlags.initialStkSize,
                 rts_apply(cap,
                     (StgClosure *)handler,

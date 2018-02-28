@@ -162,31 +162,39 @@ pushOnRunQueue (Capability *cap, StgTSO *tso)
         cap->run_queue_tl = tso;
     }
     cap->n_run_queue++;
+    cap->hrun_queue_current = tso;
 }
 
 /* Pop the first thread off the runnable queue.
  */
+StgTSO *
+popRunQueue (Capability *cap);
+
+/*
 INLINE_HEADER StgTSO *
-popRunQueue (Capability *cap)
+popHRunQueue (Capability *cap)
 {
-    StgTSO *t = cap->run_queue_hd;
-    ASSERT(t != END_TSO_QUEUE);
-    cap->run_queue_hd = t->_link;
-    if (t->_link != END_TSO_QUEUE) {
-        t->_link->block_info.prev = END_TSO_QUEUE;
-    }
-    t->_link = END_TSO_QUEUE; // no write barrier req'd
-    if (cap->run_queue_hd == END_TSO_QUEUE) {
-        cap->run_queue_tl = END_TSO_QUEUE;
-    }
-    cap->n_run_queue--;
-    return t;
+  StgTSO *tso = cap->hrun_queue;
+  ASSERT(tso != NULL);
+  // set hrun_queue to child if possible
+  if (tso->children != NULL) {
+    cap->hrun_queue = tso->children;
+    return;
+  }
+  // find the next hthread
+  while(1) {
+    if (tso->hlink != NULL) {
+      cap->hrun_queue = tso->hlink;
+      return;
+    } else if
+  }
 }
+*/
 
 INLINE_HEADER StgTSO *
 peekRunQueue (Capability *cap)
 {
-    return cap->run_queue_hd;
+    return cap->hrun_queue_current;
 }
 
 void promoteInRunQueue (Capability *cap, StgTSO *tso);
@@ -218,7 +226,11 @@ emptyQueue (StgTSO *q)
 INLINE_HEADER bool
 emptyRunQueue(Capability *cap)
 {
-    return cap->n_run_queue == 0;
+    if (cap->n_run_queue == 0) {
+      ASSERT(cap->run_queue_hd == END_TSO_QUEUE);
+      return true;
+    }
+    return false;
 }
 
 INLINE_HEADER void

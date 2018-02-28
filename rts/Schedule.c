@@ -313,14 +313,19 @@ schedule (Capability *initialCapability, Task *task)
     }
 #endif
 
-    ASSERT(cap->hrun_queue == NULL || cap->run_queue_hd == END_TSO_QUEUE);
     //
     // Get a thread to run
     //
-    if (cap->hrun_queue != NULL) {
-      t = popHRunQueue(cap);
-    } else {
-      t = popRunQueue(cap);
+    t = popRunQueue(cap);
+    if (t == END_TSO_QUEUE) {
+      barf("everybody was kung fu fighting");
+    }
+
+    if (t->what_next == ThreadComplete && t->id == 3) {
+      barf("vbahjekbgvilr");
+      debugTrace(DEBUG_sched, "vnjiealgr");
+
+      1+1;
     }
 
     // Sanity check the thread we're about to run.  This can be
@@ -568,6 +573,110 @@ run_thread:
 /* -----------------------------------------------------------------------------
  * Run queue operations
  * -------------------------------------------------------------------------- */
+
+bool
+isOnRunQueue(StgTSO *tso)
+{
+  return !(tso->_link == END_TSO_QUEUE && tso->block_info.prev == END_TSO_QUEUE);
+}
+
+
+StgTSO *
+popRunQueue (Capability *cap)
+{
+
+  StgTSO *tso = cap->hrun_queue_current;
+  ASSERT(tso != END_TSO_QUEUE);
+
+  // 1) Remove tso from cap->run_queue
+  if (cap->run_queue_hd == tso && cap->run_queue_tl == tso) {
+    ASSERT(cap->n_run_queue == 1);
+    ASSERT(tso->_link == END_TSO_QUEUE);
+    ASSERT(tso->block_info.prev == END_TSO_QUEUE);
+    cap->run_queue_hd = END_TSO_QUEUE;
+    cap->run_queue_tl = END_TSO_QUEUE;
+  } else if (cap->run_queue_hd == tso) {
+    // we at the front of the run queue
+    ASSERT(tso->block_info.prev == END_TSO_QUEUE);
+    cap->run_queue_hd = tso->_link;
+    tso->_link->block_info.prev = END_TSO_QUEUE;
+    tso->_link = END_TSO_QUEUE;
+  } else if (cap->run_queue_tl == tso) {
+    // we at the end of the run queue
+    ASSERT(tso->_link == END_TSO_QUEUE);
+    cap->run_queue_tl = tso->block_info.prev;
+    tso->block_info.prev = END_TSO_QUEUE;
+    cap->run_queue_tl->_link = END_TSO_QUEUE;
+  } else if (tso->_link == END_TSO_QUEUE && tso->block_info.prev == END_TSO_QUEUE) {
+    if (cap->run_queue_hd != END_TSO_QUEUE) {
+      tso = cap->run_queue_hd;
+      if (tso->_link != END_TSO_QUEUE) {
+        cap->hrun_queue_current = tso->_link;
+        tso->_link->block_info.prev = END_TSO_QUEUE;
+        cap->run_queue_hd = tso->_link;
+      } else {
+        // Nothing left to run... gonna fail
+        cap->hrun_queue_current = END_TSO_QUEUE;
+      }
+      //tso->_link = END_TSO_QUEUE;
+    }
+  } else {
+    // we in the middle
+    ASSERT(tso->_link != END_TSO_QUEUE);
+    ASSERT(tso->block_info.prev != END_TSO_QUEUE);
+
+    StgTSO *back, *next;
+
+    back = tso->block_info.prev;
+    next = tso->_link;
+
+    back->_link = next;
+    next->block_info.prev = back;
+
+    tso->_link = END_TSO_QUEUE;
+    tso->block_info.prev = END_TSO_QUEUE;
+
+  }
+
+  cap->n_run_queue--;
+
+
+
+  // 2) Set cap->hrun_queue_current
+  if (tso->children != END_TSO_QUEUE) {
+    cap->hrun_queue_current = tso->children;
+    return tso;
+  }
+
+  while(1) {
+    if (tso->hlink != END_TSO_QUEUE) {
+      cap->hrun_queue_current = tso;
+      return tso;
+    } else if (tso->parent == END_TSO_QUEUE) {
+      debugTrace(DEBUG_sched, "H threads have all finished. Putting main H thread at end of the run queue");
+      cap->hrun_queue_current = tso;
+      return tso;
+    } else {
+      tso = tso->parent;
+    }
+  }
+
+
+/*
+    StgTSO *t = cap->run_queue_hd;
+    ASSERT(t != END_TSO_QUEUE);
+    cap->run_queue_hd = t->_link;
+    if (t->_link != END_TSO_QUEUE) {
+        t->_link->block_info.prev = END_TSO_QUEUE;
+    }
+    t->_link = END_TSO_QUEUE; // no write barrier req'd
+    if (cap->run_queue_hd == END_TSO_QUEUE) {
+        cap->run_queue_tl = END_TSO_QUEUE;
+    }
+    cap->n_run_queue--;
+    return t;
+*/
+}
 
 static void
 removeFromRunQueue (Capability *cap, StgTSO *tso)
@@ -2510,15 +2619,18 @@ scheduleThread(Capability *cap, StgTSO *tso)
     appendToRunQueue(cap,tso);
 }
 
+
 void
 scheduleHThreadOn(Capability *cap, StgWord cpu USED_IF_THREADS, StgTSO *tso)
 {
+  /*
   tso->flags |= TSO_LOCKED;
   cpu %= enabled_capabilities;
   Capability *to = capabilities[cpu];
   if (to->hrun_queue == NULL) {
     to->hrun_queue = tso;
   }
+  */
 }
 
 void

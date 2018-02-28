@@ -1168,6 +1168,9 @@ markCapability (evac_fn evac, void *user, Capability *cap,
     // thread's index plus a multiple of the number of GC threads.
     evac(user, (StgClosure **)(void *)&cap->run_queue_hd);
     evac(user, (StgClosure **)(void *)&cap->run_queue_tl);
+    evac(user, (StgClosure **)(void *)&cap->hrun_queue_current);
+    evac(user, (StgClosure **)(void *)&cap->hrun_queue_top);
+    evac(user, (StgClosure **)(void *)&cap->run_queue_tl);
 #if defined(THREADED_RTS)
     evac(user, (StgClosure **)(void *)&cap->inbox);
 #endif

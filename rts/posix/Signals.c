@@ -473,6 +473,7 @@ startSignalHandlers(Capability *cap)
 
     scheduleThread(cap,
         createIOThread(cap,
+          cap->hrun_queue_top,
           RtsFlags.GcFlags.initialStkSize,
               rts_apply(cap,
                   rts_apply(cap,

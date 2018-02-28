@@ -394,10 +394,36 @@ createGenThread (Capability *cap, W_ stack_size,  StgClosure *closure)
 }
 
 StgTSO *
-createIOThread (Capability *cap, W_ stack_size,  StgClosure *closure)
+createIOThread (Capability *cap, StgTSO *parent, W_ stack_size,  StgClosure *closure)
 {
   StgTSO *t;
   t = createThread (cap, stack_size);
+  
+  // Child is scheduled on the same capability as parent. Set the parent/child
+  // relationships
+  if (parent != END_TSO_QUEUE && parent != NULL) {
+    t->hlink = parent->children;
+    parent->children = t;
+    t->parent = parent;
+    t->children = END_TSO_QUEUE;
+  } else if (cap->hrun_queue_top != END_TSO_QUEUE || cap->hrun_queue_top != NULL) {
+    // Hacks on hacks...
+    t->children = cap->hrun_queue_top;
+    cap->hrun_queue_top->parent = t;
+    t->hlink = END_TSO_QUEUE;
+    t->parent = END_TSO_QUEUE;
+    cap->hrun_queue_top = t;
+  } else {
+    if (cap->hrun_queue_top != END_TSO_QUEUE || cap->hrun_queue_top != NULL) {
+      barf("fuck dis shit");
+    }
+    cap->hrun_queue_top = t;
+    cap->hrun_queue_current = t;
+    t->hlink = END_TSO_QUEUE;
+    t->children = END_TSO_QUEUE;
+    t->parent = END_TSO_QUEUE;
+  }
+
   pushClosure(t, (W_)&stg_ap_v_info);
   pushClosure(t, (W_)closure);
   pushClosure(t, (W_)&stg_enter_info);
@@ -410,13 +436,6 @@ createHIOThread (Capability *cap, StgTSO *parent, W_ cpu,
 {
   StgTSO *t;
   t = createThread (cap, stack_size);
-
-  if (cap->no == cpu) {
-    // Child is scheduled on the same capability as parent. Set the parent/child
-    // relationships
-    t->parent = parent;
-    t->hlink = parent->children;
-  }
 
   debugTrace(DEBUG_sched, "TSO %d is an hthread", t->id);
   debugTrace(DEBUG_sched, "Parent is %d", parent->id);
@@ -437,6 +456,12 @@ createStrictIOThread(Capability *cap, W_ stack_size,  StgClosure *closure)
 {
   StgTSO *t;
   t = createThread(cap, stack_size);
+  
+  ASSERT(cap->hrun_queue_current == END_TSO_QUEUE);
+  ASSERT(cap->hrun_queue_top == END_TSO_QUEUE);
+  cap->hrun_queue_top = t;
+  cap->hrun_queue_current = t;
+
   pushClosure(t, (W_)&stg_forceIO_info);
   pushClosure(t, (W_)&stg_ap_v_info);
   pushClosure(t, (W_)closure);
@@ -548,8 +573,7 @@ void rts_evalLazyIO (/* inout */ Capability **cap,
                      /* out */   HaskellObj *ret)
 {
     StgTSO *tso;
-
-    tso = createIOThread(*cap, RtsFlags.GcFlags.initialStkSize, p);
+    tso = createIOThread(*cap, END_TSO_QUEUE, RtsFlags.GcFlags.initialStkSize, p);
     scheduleWaitThread(tso,ret,cap);
 }
 
@@ -560,7 +584,8 @@ void rts_evalLazyIO_ (/* inout */ Capability **cap,
 {
     StgTSO *tso;
 
-    tso = createIOThread(*cap, stack_size, p);
+    barf("Someone did bad call");
+    tso = createIOThread(*cap, END_TSO_QUEUE, stack_size, p);
     scheduleWaitThread(tso,ret,cap);
 }
 

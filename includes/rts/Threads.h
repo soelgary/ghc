@@ -30,7 +30,7 @@ void scheduleWaitThread (/* in    */ StgTSO *tso,
 
 StgTSO *createGenThread       (Capability *cap, W_ stack_size,
                                StgClosure *closure);
-StgTSO *createIOThread        (Capability *cap, W_ stack_size,
+StgTSO *createIOThread        (Capability *cap, StgTSO *parent, W_ stack_size,
                                StgClosure *closure);
 StgTSO *createHIOThread       (Capability *cap, StgTSO *parent, W_ cpu,
                                W_ stack_size, StgClosure *closure);
