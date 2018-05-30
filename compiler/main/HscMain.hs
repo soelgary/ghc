@@ -169,6 +169,7 @@ import System.IO (fixIO)
 import qualified Data.Map as Map
 import qualified Data.Set as S
 import Data.Set (Set)
+import DynamicLoading (initializePlugins)
 
 #include "HsVersions.h"
 
@@ -362,7 +363,7 @@ hscParse' mod_summary
                 srcs0 = nub $ filter (not . (tmpDir dflags `isPrefixOf`))
                             $ filter (not . (== n_hspp))
                             $ map FilePath.normalise
-                            $ filter (not . (isPrefixOf "<"))
+                            $ filter (not . isPrefixOf "<")
                             $ map unpackFS
                             $ srcfiles pst
                 srcs1 = case ml_hs_file (ms_location mod_summary) of
@@ -671,15 +672,18 @@ hscIncrementalCompile :: Bool
 hscIncrementalCompile always_do_basic_recompilation_check m_tc_result
     mHscMessage hsc_env' mod_summary source_modified mb_old_iface mod_index
   = do
+    dflags <- initializePlugins hsc_env' (hsc_dflags hsc_env')
+    let hsc_env'' = hsc_env' { hsc_dflags = dflags }
+
     -- One-shot mode needs a knot-tying mutable variable for interface
     -- files. See TcRnTypes.TcGblEnv.tcg_type_env_var.
     -- See also Note [hsc_type_env_var hack]
     type_env_var <- newIORef emptyNameEnv
     let mod = ms_mod mod_summary
-        hsc_env | isOneShot (ghcMode (hsc_dflags hsc_env'))
-                = hsc_env' { hsc_type_env_var = Just (mod, type_env_var) }
+        hsc_env | isOneShot (ghcMode (hsc_dflags hsc_env''))
+                = hsc_env'' { hsc_type_env_var = Just (mod, type_env_var) }
                 | otherwise
-                = hsc_env'
+                = hsc_env''
 
     -- NB: enter Hsc monad here so that we don't bail out early with
     -- -Werror on typechecker warnings; we also want to run the desugarer
@@ -905,15 +909,16 @@ hscCheckSafeImports tcg_env = do
               -> return tcg_env'
 
     warns dflags rules = listToBag $ map (warnRules dflags) rules
-    warnRules dflags (L loc (HsRule n _ _ _ _ _ _)) =
+    warnRules dflags (L loc (HsRule _ n _ _ _ _)) =
         mkPlainWarnMsg dflags loc $
             text "Rule \"" <> ftext (snd $ unLoc n) <> text "\" ignored" $+$
             text "User defined rules are disabled under Safe Haskell"
+    warnRules _ (L _ (XRuleDecl _)) = panic "hscCheckSafeImports"
 
 -- | Validate that safe imported modules are actually safe.  For modules in the
 -- HomePackage (the package the module we are compiling in resides) this just
 -- involves checking its trust type is 'Safe' or 'Trustworthy'. For modules
--- that reside in another package we also must check that the external pacakge
+-- that reside in another package we also must check that the external package
 -- is trusted. See the Note [Safe Haskell Trust Check] above for more
 -- information.
 --
@@ -1309,15 +1314,17 @@ hscGenHardCode hsc_env cgguts mod_summary output_filename = do
         -------------------
         -- PREPARE FOR CODE GENERATION
         -- Do saturation and convert to A-normal form
-        prepd_binds <- {-# SCC "CorePrep" #-}
+        (prepd_binds, local_ccs) <- {-# SCC "CorePrep" #-}
                        corePrepPgm hsc_env this_mod location
                                    core_binds data_tycons
         -----------------  Convert to STG ------------------
-        (stg_binds, cost_centre_info)
+        (stg_binds, (caf_ccs, caf_cc_stacks))
             <- {-# SCC "CoreToStg" #-}
                myCoreToStg dflags this_mod prepd_binds
 
-        let prof_init = profilingInitCode this_mod cost_centre_info
+        let cost_centre_info =
+              (S.toList local_ccs ++ caf_ccs, caf_cc_stacks)
+            prof_init = profilingInitCode this_mod cost_centre_info
             foreign_stubs = foreign_stubs0 `appendStubC` prof_init
 
         ------------------  Code generation ------------------
@@ -1374,7 +1381,7 @@ hscInteractive hsc_env cgguts mod_summary = do
     -------------------
     -- PREPARE FOR CODE GENERATION
     -- Do saturation and convert to A-normal form
-    prepd_binds <- {-# SCC "CorePrep" #-}
+    (prepd_binds, _) <- {-# SCC "CorePrep" #-}
                    corePrepPgm hsc_env this_mod location core_binds data_tycons
     -----------------  Generate byte code ------------------
     comp_bc <- byteCodeGen hsc_env this_mod prepd_binds data_tycons mod_breaks
@@ -1390,15 +1397,13 @@ hscCompileCmmFile hsc_env filename output_filename = runHsc hsc_env $ do
     let dflags = hsc_dflags hsc_env
     cmm <- ioMsgMaybe $ parseCmmFile dflags filename
     liftIO $ do
-        us <- mkSplitUniqSupply 'S'
-        let initTopSRT = initUs_ us emptySRT
         dumpIfSet_dyn dflags Opt_D_dump_cmm_verbose "Parsed Cmm" (ppr cmm)
-        (_, cmmgroup) <- cmmPipeline hsc_env initTopSRT cmm
-        rawCmms <- cmmToRawCmm dflags (Stream.yield cmmgroup)
         let -- Make up a module name to give the NCG. We can't pass bottom here
             -- lest we reproduce #11784.
             mod_name = mkModuleName $ "Cmm$" ++ FilePath.takeFileName filename
             cmm_mod = mkModule (thisPackage dflags) mod_name
+        (_, cmmgroup) <- cmmPipeline hsc_env (emptySRT cmm_mod) cmm
+        rawCmms <- cmmToRawCmm dflags (Stream.yield cmmgroup)
         _ <- codeOutput dflags cmm_mod output_filename no_loc NoStubs [] []
              rawCmms
         return ()
@@ -1449,21 +1454,17 @@ doCodeGen hsc_env this_mod data_tycons
         osSubsectionsViaSymbols (platformOS (targetPlatform dflags))
         = {-# SCC "cmmPipeline" #-}
           let run_pipeline us cmmgroup = do
-                let (topSRT', us') = initUs us emptySRT
-                (topSRT, cmmgroup) <- cmmPipeline hsc_env topSRT' cmmgroup
-                let srt | isEmptySRT topSRT = []
-                        | otherwise         = srtToData topSRT
-                return (us', srt ++ cmmgroup)
+                (_topSRT, cmmgroup) <-
+                  cmmPipeline hsc_env (emptySRT this_mod) cmmgroup
+                return (us, cmmgroup)
 
           in do _ <- Stream.mapAccumL run_pipeline us ppr_stream1
                 return ()
 
       | otherwise
         = {-# SCC "cmmPipeline" #-}
-          let initTopSRT = initUs_ us emptySRT
-              run_pipeline = cmmPipeline hsc_env
-          in do topSRT <- Stream.mapAccumL run_pipeline initTopSRT ppr_stream1
-                Stream.yield (srtToData topSRT)
+          let run_pipeline = cmmPipeline hsc_env
+          in void $ Stream.mapAccumL run_pipeline (emptySRT this_mod) ppr_stream1
 
     let
         dump2 a = do dumpIfSet_dyn dflags Opt_D_dump_cmm
@@ -1478,15 +1479,15 @@ doCodeGen hsc_env this_mod data_tycons
 
 myCoreToStg :: DynFlags -> Module -> CoreProgram
             -> IO ( [StgTopBinding] -- output program
-                  , CollectedCCs) -- cost centre info (declared and used)
+                  , CollectedCCs )  -- CAF cost centre info (declared and used)
 myCoreToStg dflags this_mod prepd_binds = do
-    let stg_binds
+    let (stg_binds, cost_centre_info)
          = {-# SCC "Core2Stg" #-}
            coreToStg dflags this_mod prepd_binds
 
-    (stg_binds2, cost_centre_info)
+    stg_binds2
         <- {-# SCC "Stg2Stg" #-}
-           stg2stg dflags this_mod stg_binds
+           stg2stg dflags stg_binds
 
     return (stg_binds2, cost_centre_info)
 
@@ -1612,7 +1613,7 @@ hscDeclsWithLocation hsc_env0 str source linenumber =
 
     {- Prepare For Code Generation -}
     -- Do saturation and convert to A-normal form
-    prepd_binds <- {-# SCC "CorePrep" #-}
+    (prepd_binds, _) <- {-# SCC "CorePrep" #-}
       liftIO $ corePrepPgm hsc_env this_mod iNTERACTIVELoc core_binds data_tycons
 
     {- Generate byte code -}
@@ -1709,7 +1710,7 @@ hscParseExpr expr = do
   hsc_env <- getHscEnv
   maybe_stmt <- hscParseStmt expr
   case maybe_stmt of
-    Just (L _ (BodyStmt expr _ _ _)) -> return expr
+    Just (L _ (BodyStmt _ expr _ _)) -> return expr
     _ -> throwErrors $ unitBag $ mkPlainErrMsg (hsc_dflags hsc_env) noSrcSpan
       (text "not an expression:" <+> quotes (text expr))
 

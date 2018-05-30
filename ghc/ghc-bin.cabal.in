@@ -40,7 +40,7 @@ Executable ghc
     if os(windows)
         Build-Depends: Win32  >= 2.3 && < 2.7
     else
-        Build-Depends: unix   == 2.7.*
+        Build-Depends: unix   >= 2.7 && < 2.9
 
     C-Sources: hschooks.c
 
@@ -61,6 +61,7 @@ Executable ghc
         CPP-Options: -DGHCI
         GHC-Options: -fno-warn-name-shadowing
         Other-Modules:
+            GHCi.Leak
             GHCi.UI
             GHCi.UI.Info
             GHCi.UI.Monad

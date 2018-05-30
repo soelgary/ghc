@@ -67,7 +67,7 @@ import qualified GHC.Event.Poll   as Poll
 
 -- | A timeout registration cookie.
 newtype TimeoutKey   = TK Unique
-    deriving (Eq)
+    deriving Eq -- ^ @since 4.7.0.0
 
 -- | Callback invoked on timeout events.
 type TimeoutCallback = IO ()
@@ -76,7 +76,9 @@ data State = Created
            | Running
            | Dying
            | Finished
-             deriving (Eq, Show)
+             deriving ( Eq   -- ^ @since 4.7.0.0
+                      , Show -- ^ @since 4.7.0.0
+                      )
 
 -- | A priority search queue, with timeouts as priorities.
 type TimeoutQueue = Q.PSQ TimeoutCallback
@@ -218,7 +220,9 @@ registerTimeout mgr us cb = do
       now <- getMonotonicTimeNSec
       let expTime = fromIntegral us * 1000 + now
 
-      editTimeouts mgr (Q.insert key expTime cb)
+      -- "unsafeInsertNew" is safe - the key must not exist in the PSQ. It
+      -- doesn't because we just generated it from a unique supply.
+      editTimeouts mgr (Q.unsafeInsertNew key expTime cb)
   return $ TK key
 
 -- | Unregister an active timeout.

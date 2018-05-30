@@ -87,6 +87,7 @@ test('T5425', normal, compile_fail, [''])
 test('T984', normal, compile_fail, [''])
 test('T7848', normal, compile_fail, ['-dppr-user-length=100'])
 test('ExportCommaComma', normal, compile_fail, [''])
+test('T8258NoGADTs', normal, compile_fail, [''])
 test('T8430', literate, compile_fail, [''])
 test('T8431', compile_timeout_multiplier(0.05),
      compile_fail, ['-XAlternativeLayoutRule'])
@@ -105,6 +106,8 @@ test('T8501a', normal, compile_fail, [''])
 test('T8501b', normal, compile_fail, [''])
 test('T8501c', normal, compile_fail, [''])
 test('T12610', normal, compile_fail, [''])
+test('T13450', normal, compile_fail, [''])
+test('T13450TH', normal, compile_fail, [''])
 test('T14588', normal, compile_fail, [''])
 test('T14740', normal, compile_fail, [''])
 
@@ -114,3 +117,5 @@ test('NumericUnderscoresFail0',
      grep_errmsg(r'^NumericUnderscoresFail0.hs:'), compile_fail, [''])
 test('NumericUnderscoresFail1',
      grep_errmsg(r'^NumericUnderscoresFail1.hs:'), compile_fail, [''])
+
+test('InfixAppPatErr', normal, compile_fail, [''])

@@ -106,7 +106,7 @@ module HscTypes (
         -- * Information on imports and exports
         WhetherHasOrphans, IsBootInterface, Usage(..),
         Dependencies(..), noDependencies,
-        updNameCacheIO,
+        updNameCache,
         IfaceExport,
 
         -- * Warnings
@@ -1244,7 +1244,8 @@ data ImportedModsVal
         imv_span :: SrcSpan,             -- ^ the source span of the whole import
         imv_is_safe :: IsSafeImport,     -- ^ whether this is a safe import
         imv_is_hiding :: Bool,           -- ^ whether this is an "hiding" import
-        imv_all_exports :: GlobalRdrEnv, -- ^ all the things the module could provide
+        imv_all_exports :: !GlobalRdrEnv, -- ^ all the things the module could provide
+          -- NB. BangPattern here: otherwise this leaks. (#15111)
         imv_qualified :: Bool            -- ^ whether this is a qualified import
         }
 
@@ -1278,7 +1279,7 @@ data ModGuts
                                          -- See Note [Overall plumbing for rules] in Rules.hs
         mg_binds     :: !CoreProgram,    -- ^ Bindings for this module
         mg_foreign   :: !ForeignStubs,   -- ^ Foreign exports declared in this module
-        mg_foreign_files :: ![(ForeignSrcLang, String)],
+        mg_foreign_files :: ![(ForeignSrcLang, FilePath)],
         -- ^ Files to be compiled with the C compiler
         mg_warns     :: !Warnings,       -- ^ Warnings declared in the module
         mg_anns      :: [Annotation],    -- ^ Annotations declared in this module
@@ -1339,7 +1340,7 @@ data CgGuts
                 -- as part of the code-gen of tycons
 
         cg_foreign   :: !ForeignStubs,   -- ^ Foreign export stubs
-        cg_foreign_files :: ![(ForeignSrcLang, String)],
+        cg_foreign_files :: ![(ForeignSrcLang, FilePath)],
         cg_dep_pkgs  :: ![InstalledUnitId], -- ^ Dependent packages, used to
                                             -- generate #includes for C code gen
         cg_hpc_info  :: !HpcInfo,           -- ^ Program coverage tick box information
@@ -1641,7 +1642,7 @@ extendInteractiveContext ictxt new_tythings new_cls_insts new_fam_insts defaults
   = ictxt { ic_mod_index  = ic_mod_index ictxt + 1
                             -- Always bump this; even instances should create
                             -- a new mod_index (Trac #9426)
-          , ic_tythings   = new_tythings ++ ic_tythings ictxt
+          , ic_tythings   = new_tythings ++ old_tythings
           , ic_rn_gbl_env = ic_rn_gbl_env ictxt `icExtendGblRdrEnv` new_tythings
           , ic_instances  = ( new_cls_insts ++ old_cls_insts
                             , new_fam_insts ++ fam_insts )
@@ -1651,6 +1652,8 @@ extendInteractiveContext ictxt new_tythings new_cls_insts new_fam_insts defaults
           , ic_fix_env    = fix_env  -- See Note [Fixity declarations in GHCi]
           }
   where
+    new_ids = [id | AnId id <- new_tythings]
+    old_tythings = filterOut (shadowed_by new_ids) (ic_tythings ictxt)
 
     -- Discard old instances that have been fully overridden
     -- See Note [Override identical instances in GHCi]
@@ -1662,10 +1665,17 @@ extendInteractiveContextWithIds :: InteractiveContext -> [Id] -> InteractiveCont
 extendInteractiveContextWithIds ictxt new_ids
   | null new_ids = ictxt
   | otherwise    = ictxt { ic_mod_index  = ic_mod_index ictxt + 1
-                         , ic_tythings   = new_tythings ++ ic_tythings ictxt
+                         , ic_tythings   = new_tythings ++ old_tythings
                          , ic_rn_gbl_env = ic_rn_gbl_env ictxt `icExtendGblRdrEnv` new_tythings }
   where
     new_tythings = map AnId new_ids
+    old_tythings = filterOut (shadowed_by new_ids) (ic_tythings ictxt)
+
+shadowed_by :: [Id] -> TyThing -> Bool
+shadowed_by ids = shadowed
+  where
+    shadowed id = getOccName id `elemOccSet` new_occs
+    new_occs = mkOccSet (map getOccName ids)
 
 setInteractivePackage :: HscEnv -> HscEnv
 -- Set the 'thisPackage' DynFlag to 'interactive'
@@ -2603,10 +2613,10 @@ interface file); so we give it 'noSrcLoc' then.  Later, when we find
 its binding site, we fix it up.
 -}
 
-updNameCacheIO :: HscEnv
-               -> (NameCache -> (NameCache, c))  -- The updating function
-               -> IO c
-updNameCacheIO hsc_env upd_fn
+updNameCache :: HscEnv
+             -> (NameCache -> (NameCache, c))  -- The updating function
+             -> IO c
+updNameCache hsc_env upd_fn
   = atomicModifyIORef' (hsc_NC hsc_env) upd_fn
 
 mkSOName :: Platform -> FilePath -> FilePath

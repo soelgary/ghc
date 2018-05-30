@@ -5,7 +5,7 @@ module TcSMonad (
 
     -- The work list
     WorkList(..), isEmptyWorkList, emptyWorkList,
-    extendWorkListNonEq, extendWorkListCt, extendWorkListDerived,
+    extendWorkListNonEq, extendWorkListCt,
     extendWorkListCts, extendWorkListEq, extendWorkListFunEq,
     appendWorkList, extendWorkListImplic,
     selectNextWorkItem,
@@ -16,7 +16,7 @@ module TcSMonad (
     TcS, runTcS, runTcSDeriveds, runTcSWithEvBinds,
     failTcS, warnTcS, addErrTcS,
     runTcSEqualities,
-    nestTcS, nestImplicTcS, setEvBindsTcS, buildImplication,
+    nestTcS, nestImplicTcS, setEvBindsTcS, checkConstraintsTcS,
 
     runTcPluginTcS, addUsedGRE, addUsedGREs,
 
@@ -28,7 +28,7 @@ module TcSMonad (
     -- Evidence creation and transformation
     MaybeNew(..), freshGoals, isFresh, getEvExpr,
 
-    newTcEvBinds,
+    newTcEvBinds, newNoTcEvBinds,
     newWantedEq, emitNewWantedEq,
     newWanted, newWantedEvVar, newWantedNC, newWantedEvVarNC, newDerivedNC,
     newBoundEvVarId,
@@ -36,8 +36,9 @@ module TcSMonad (
     setEvBind, setWantedEq, setEqIfWanted,
     setWantedEvTerm, setWantedEvBind, setEvBindIfWanted,
     newEvVar, newGivenEvVar, newGivenEvVars,
-    emitNewDerived, emitNewDeriveds, emitNewDerivedEq,
+    emitNewDeriveds, emitNewDerivedEq,
     checkReductionDepth,
+    getSolvedDicts, setSolvedDicts,
 
     getInstEnvs, getFamInstEnvs,                -- Getting the environments
     getTopEnv, getGblEnv, getLclEnv,
@@ -82,6 +83,7 @@ module TcSMonad (
 
     -- The flattening cache
     lookupFlatCache, extendFlatCache, newFlattenSkolem,            -- Flatten skolems
+    dischargeFunEq, pprKicked,
 
     -- Inert CFunEqCans
     updInertFunEqs, findFunEq,
@@ -94,11 +96,12 @@ module TcSMonad (
     cloneMetaTyVar, demoteUnfilledFmv,
     tcInstType, tcInstSkolTyVarsX,
 
-    TcLevel, isTouchableMetaTyVarTcS,
+    TcLevel,
     isFilledMetaTyVar_maybe, isFilledMetaTyVar,
     zonkTyCoVarsAndFV, zonkTcType, zonkTcTypes, zonkTcTyVar, zonkCo,
     zonkTyCoVarsAndFVList,
     zonkSimples, zonkWC,
+    zonkTcTyCoVarBndr,
 
     -- References
     newTcRef, readTcRef, updTcRef,
@@ -160,7 +163,7 @@ import UniqFM
 import UniqDFM
 import Maybes
 
-import TrieMap
+import CoreMap
 import Control.Monad
 import qualified Control.Monad.Fail as MonadFail
 import MonadUtils
@@ -191,7 +194,8 @@ consider using this depth for prioritization as well in the future.
 As a simple form of priority queue, our worklist separates out
 
 * equalities (wl_eqs); see Note [Prioritise equalities]
-* non-equality deriveds (wl_derivs); see Note [Process derived items last]
+* type-function equalities (wl_funeqs)
+* all the rest (wl_rest)
 
 Note [Prioritise equalities]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -201,10 +205,6 @@ It's very important to process equalities /first/:
   class constraint first, we may end up putting it into the inert set
   and then kicking it out later.  That's extra work compared to just
   doing the equality first.
-
-* (Derived equalities) Notwithstanding Note [Process derived items
-  last], we want to process /Derived/ equalities eagerly, for the
-  (Efficiency) reason above.
 
 * (Avoiding fundep iteration) As Trac #14723 showed, it's possible to
   get non-termination if we
@@ -216,14 +216,20 @@ It's very important to process equalities /first/:
         equalities in the work-list), but generates yet more fundeps
   Solution: prioritise derived equalities over class constraints
 
-* (Class equalities) We need to prioritise equalities even if they are
-  hidden inside a class constraint; see Note [Prioritise class
-  equalities]
+* (Class equalities) We need to prioritise equalities even if they
+  are hidden inside a class constraint;
+  see Note [Prioritise class equalities]
 
 * (Kick-out) We want to apply this priority scheme to kicked-out
   constraints too (see the call to extendWorkListCt in kick_out_rewritable
   E.g. a CIrredCan can be a hetero-kinded (t1 ~ t2), which may become
   homo-kinded when kicked out, and hence we want to priotitise it.
+
+* (Derived equalities) Originally we tried to postpone processing
+  Derived equalities, in the hope that we might never need to deal
+  with them at all; but in fact we must process Derived equalities
+  eagerly, partly for the (Efficiency) reason, and more importantly
+  for (Avoiding fundep iteration).
 
 Note [Prioritise class equalities]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -241,13 +247,6 @@ So we arrange to put these particular class constraints in the wl_eqs.
   NB: since we do not currently apply the substitution to the
   inert_solved_dicts, the knot-tying still seems a bit fragile.
   But this makes it better.
-
-Note [Process derived items last]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-We can often solve all goals without processing *any* derived constraints.
-The derived constraints are just there to help us if we get stuck.  So
-we keep them in a separate list.
-
 -}
 
 -- See Note [WorkList priorities]
@@ -263,29 +262,23 @@ data WorkList
 
        , wl_rest    :: [Ct]
 
-       , wl_deriv   :: [CtEvidence]
-                       -- Implicitly non-canonical
-                       -- No equalities in here (they are in wl_eqs)
-                       -- See Note [Process derived items last]
-
        , wl_implics :: Bag Implication  -- See Note [Residual implications]
     }
 
 appendWorkList :: WorkList -> WorkList -> WorkList
 appendWorkList
     (WL { wl_eqs = eqs1, wl_funeqs = funeqs1, wl_rest = rest1
-        , wl_deriv = ders1, wl_implics = implics1 })
+        , wl_implics = implics1 })
     (WL { wl_eqs = eqs2, wl_funeqs = funeqs2, wl_rest = rest2
-        , wl_deriv = ders2, wl_implics = implics2 })
+        , wl_implics = implics2 })
    = WL { wl_eqs     = eqs1     ++ eqs2
         , wl_funeqs  = funeqs1  ++ funeqs2
         , wl_rest    = rest1    ++ rest2
-        , wl_deriv   = ders1    ++ ders2
         , wl_implics = implics1 `unionBags`   implics2 }
 
 workListSize :: WorkList -> Int
-workListSize (WL { wl_eqs = eqs, wl_funeqs = funeqs, wl_deriv = ders, wl_rest = rest })
-  = length eqs + length funeqs + length rest + length ders
+workListSize (WL { wl_eqs = eqs, wl_funeqs = funeqs, wl_rest = rest })
+  = length eqs + length funeqs + length rest
 
 workListWantedCount :: WorkList -> Int
 -- Count the things we need to solve
@@ -302,9 +295,6 @@ workListWantedCount (WL { wl_eqs = eqs, wl_rest = rest })
 extendWorkListEq :: Ct -> WorkList -> WorkList
 extendWorkListEq ct wl = wl { wl_eqs = ct : wl_eqs wl }
 
-extendWorkListEqs :: [Ct] -> WorkList -> WorkList
-extendWorkListEqs cts wl = wl { wl_eqs = cts ++ wl_eqs wl }
-
 extendWorkListFunEq :: Ct -> WorkList -> WorkList
 extendWorkListFunEq ct wl = wl { wl_funeqs = ct : wl_funeqs wl }
 
@@ -312,15 +302,9 @@ extendWorkListNonEq :: Ct -> WorkList -> WorkList
 -- Extension by non equality
 extendWorkListNonEq ct wl = wl { wl_rest = ct : wl_rest wl }
 
-extendWorkListDerived :: CtLoc -> CtEvidence -> WorkList -> WorkList
-extendWorkListDerived loc ev wl
-  | isDroppableDerivedLoc loc = wl { wl_deriv = ev : wl_deriv wl }
-  | otherwise                 = extendWorkListEq (mkNonCanonical ev) wl
-
-extendWorkListDeriveds :: CtLoc -> [CtEvidence] -> WorkList -> WorkList
-extendWorkListDeriveds loc evs wl
-  | isDroppableDerivedLoc loc = wl { wl_deriv = evs ++ wl_deriv wl }
-  | otherwise                 = extendWorkListEqs (map mkNonCanonical evs) wl
+extendWorkListDeriveds :: [CtEvidence] -> WorkList -> WorkList
+extendWorkListDeriveds evs wl
+  = extendWorkListCts (map mkNonCanonical evs) wl
 
 extendWorkListImplic :: Bag Implication -> WorkList -> WorkList
 extendWorkListImplic implics wl = wl { wl_implics = implics `unionBags` wl_implics wl }
@@ -350,12 +334,12 @@ extendWorkListCts cts wl = foldr extendWorkListCt wl cts
 
 isEmptyWorkList :: WorkList -> Bool
 isEmptyWorkList (WL { wl_eqs = eqs, wl_funeqs = funeqs
-                    , wl_rest = rest, wl_deriv = ders, wl_implics = implics })
-  = null eqs && null rest && null funeqs && isEmptyBag implics && null ders
+                    , wl_rest = rest, wl_implics = implics })
+  = null eqs && null rest && null funeqs && isEmptyBag implics
 
 emptyWorkList :: WorkList
 emptyWorkList = WL { wl_eqs  = [], wl_rest = []
-                   , wl_funeqs = [], wl_deriv = [], wl_implics = emptyBag }
+                   , wl_funeqs = [], wl_implics = emptyBag }
 
 selectWorkItem :: WorkList -> Maybe (Ct, WorkList)
 -- See Note [Prioritise equalities]
@@ -370,39 +354,23 @@ getWorkList :: TcS WorkList
 getWorkList = do { wl_var <- getTcSWorkListRef
                  ; wrapTcS (TcM.readTcRef wl_var) }
 
-selectDerivedWorkItem  :: WorkList -> Maybe (Ct, WorkList)
-selectDerivedWorkItem wl@(WL { wl_deriv = ders })
-  | ev:evs <- ders = Just (mkNonCanonical ev, wl { wl_deriv  = evs })
-  | otherwise      = Nothing
-
 selectNextWorkItem :: TcS (Maybe Ct)
 -- Pick which work item to do next
 -- See Note [Prioritise equalities]
--- See Note [Process derived items last]
 selectNextWorkItem
   = do { wl_var <- getTcSWorkListRef
        ; wl <- wrapTcS (TcM.readTcRef wl_var)
-
-       ; let try :: Maybe (Ct,WorkList) -> TcS (Maybe Ct) -> TcS (Maybe Ct)
-             try mb_work do_this_if_fail
-                | Just (ct, new_wl) <- mb_work
-                = do { checkReductionDepth (ctLoc ct) (ctPred ct)
-                     ; wrapTcS (TcM.writeTcRef wl_var new_wl)
-                     ; return (Just ct) }
-                | otherwise
-                = do_this_if_fail
-
-       ; try (selectWorkItem wl) $
-
-    do { ics <- getInertCans
-       ; if inert_count ics == 0
-         then return Nothing
-         else try (selectDerivedWorkItem wl) (return Nothing) } }
+       ; case selectWorkItem wl of {
+           Nothing -> return Nothing ;
+           Just (ct, new_wl) ->
+    do { checkReductionDepth (ctLoc ct) (ctPred ct)
+       ; wrapTcS (TcM.writeTcRef wl_var new_wl)
+       ; return (Just ct) } } }
 
 -- Pretty printing
 instance Outputable WorkList where
   ppr (WL { wl_eqs = eqs, wl_funeqs = feqs
-          , wl_rest = rest, wl_implics = implics, wl_deriv = ders })
+          , wl_rest = rest, wl_implics = implics })
    = text "WL" <+> (braces $
      vcat [ ppUnless (null eqs) $
             text "Eqs =" <+> vcat (map ppr eqs)
@@ -410,8 +378,6 @@ instance Outputable WorkList where
             text "Funeqs =" <+> vcat (map ppr feqs)
           , ppUnless (null rest) $
             text "Non-eqs =" <+> vcat (map ppr rest)
-          , ppUnless (null ders) $
-            text "Derived =" <+> vcat (map ppr ders)
           , ppUnless (isEmptyBag implics) $
             ifPprDebug (text "Implics =" <+> vcat (map ppr (bagToList implics)))
                        (text "(Implics omitted)")
@@ -456,7 +422,7 @@ data InertSet
               -- NB: An ExactFunEqMap -- this doesn't match via loose types!
 
        , inert_solved_dicts   :: DictMap CtEvidence
-              -- Of form ev :: C t1 .. tn
+              -- All Wanteds, of form ev :: C t1 .. tn
               -- See Note [Solved dictionaries]
               -- and Note [Do not add superclasses of solved dictionaries]
        }
@@ -509,8 +475,10 @@ Other notes about solved dictionaries
 
 * See also Note [Do not add superclasses of solved dictionaries]
 
-* The inert_solved_dicts field is not rewritten by equalities, so it may
-  get out of date.
+* The inert_solved_dicts field is not rewritten by equalities,
+  so it may get out of date.
+
+* THe inert_solved_dicts are all Wanteds, never givens
 
 Note [Do not add superclasses of solved dictionaries]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1171,7 +1139,77 @@ work?
   because even tyvars in the casts and coercions could give
   an infinite loop if we don't expose it
 
+* CIrredCan: Yes if the inert set can rewrite the constraint.
+  We used to think splitting irreds was unnecessary, but
+  see Note [Splitting Irred WD constraints]
+
 * Others: nothing is gained by splitting.
+
+Note [Splitting Irred WD constraints]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Splitting Irred constraints can make a difference. Here is the
+scenario:
+
+  a[sk] :: F v     -- F is a type family
+  beta :: alpha
+
+  work item: [WD] a ~ beta
+
+This is heterogeneous, so we try flattening the kinds.
+
+  co :: F v ~ fmv
+  [WD] (a |> co) ~ beta
+
+This is still hetero, so we emit a kind equality and make the work item an
+inert Irred.
+
+  work item: [D] fmv ~ alpha
+  inert: [WD] (a |> co) ~ beta (CIrredCan)
+
+Can't make progress on the work item. Add to inert set. This kicks out the
+old inert, because a [D] can rewrite a [WD].
+
+  work item: [WD] (a |> co) ~ beta
+  inert: [D] fmv ~ alpha (CTyEqCan)
+
+Can't make progress on this work item either (although GHC tries by
+decomposing the cast and reflattening... but that doesn't make a difference),
+which is still hetero. Emit a new kind equality and add to inert set. But,
+critically, we split the Irred.
+
+  work list:
+   [D] fmv ~ alpha (CTyEqCan)
+   [D] (a |> co) ~ beta (CIrred) -- this one was split off
+  inert:
+   [W] (a |> co) ~ beta
+   [D] fmv ~ alpha
+
+We quickly solve the first work item, as it's the same as an inert.
+
+  work item: [D] (a |> co) ~ beta
+  inert:
+   [W] (a |> co) ~ beta
+   [D] fmv ~ alpha
+
+We decompose the cast, yielding
+
+  [D] a ~ beta
+
+We then flatten the kinds. The lhs kind is F v, which flattens to fmv which
+then rewrites to alpha.
+
+  co' :: F v ~ alpha
+  [D] (a |> co') ~ beta
+
+Now this equality is homo-kinded. So we swizzle it around to
+
+  [D] beta ~ (a |> co')
+
+and set beta := a |> co', and go home happy.
+
+If we don't split the Irreds, we loop. This is all dangerously subtle.
+
+This is triggered by test case typecheck/should_compile/SplitWD.
 
 Note [Examples of how Derived shadows helps completeness]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1335,7 +1373,9 @@ shouldSplitWD inert_eqs (CTyEqCan { cc_tyvar = tv, cc_rhs = ty
   || anyRewritableTyVar False eq_rel (canRewriteTv inert_eqs) ty
   -- NB False: do not ignore casts and coercions
   -- See Note [Splitting WD constraints]
-  where
+
+shouldSplitWD inert_eqs (CIrredCan { cc_ev = ev })
+  = anyRewritableTyVar False (ctEvEqRel ev) (canRewriteTv inert_eqs) (ctEvPred ev)
 
 shouldSplitWD _ _ = False   -- No point in splitting otherwise
 
@@ -1742,6 +1782,15 @@ addSolvedDict item cls tys
        ; updInertTcS $ \ ics ->
              ics { inert_solved_dicts = addDict (inert_solved_dicts ics) cls tys item } }
 
+getSolvedDicts :: TcS (DictMap CtEvidence)
+getSolvedDicts = do { ics <- getTcSInerts; return (inert_solved_dicts ics) }
+
+setSolvedDicts :: DictMap CtEvidence -> TcS ()
+setSolvedDicts solved_dicts
+  = updInertTcS $ \ ics ->
+    ics { inert_solved_dicts = solved_dicts }
+
+
 {- *********************************************************************
 *                                                                      *
                   Other inert-set operations
@@ -1913,8 +1962,12 @@ getNoGivenEqs tclvl skol_tvs
                       -- outer context but were refined to an insoluble by
                       -- a local equality; so do /not/ add ct_given_here.
 
-       ; traceTcS "getNoGivenEqs" (vcat [ ppr has_given_eqs, ppr inerts
-                                        , ppr insols])
+       ; traceTcS "getNoGivenEqs" $
+         vcat [ if has_given_eqs then text "May have given equalities"
+                                 else text "No given equalities"
+              , text "Skols:" <+> ppr skol_tvs
+              , text "Inerts:" <+> ppr inerts
+              , text "Insols:" <+> ppr insols]
        ; return (not has_given_eqs, insols) }
   where
     eqs_given_here :: EqualCtList -> Bool
@@ -2057,6 +2110,10 @@ b) 'a' will have been completely substituted out in the inert set,
    returned as part of 'fsks'
 
 For an example, see Trac #9211.
+
+See also TcUnify Note [Deeper level on the left] for how we ensure
+that the right variable is on the left of the equality when both are
+tyvars.
 -}
 
 removeInertCts :: [Ct] -> InertCans -> InertCans
@@ -2530,7 +2587,7 @@ runTcSDeriveds tcs
 -- | This can deal only with equality constraints.
 runTcSEqualities :: TcS a -> TcM a
 runTcSEqualities thing_inside
-  = do { ev_binds_var <- TcM.newTcEvBinds
+  = do { ev_binds_var <- TcM.newNoTcEvBinds
        ; runTcSWithEvBinds ev_binds_var thing_inside }
 
 runTcSWithEvBinds :: EvBindsVar
@@ -2667,40 +2724,40 @@ nestTcS (TcS thing_inside)
 
        ; return res }
 
-buildImplication :: SkolemInfo
-                 -> [TcTyVar]        -- Skolems
-                 -> [EvVar]          -- Givens
-                 -> TcS result
-                 -> TcS (Bag Implication, TcEvBinds, result)
--- Just like TcUnify.buildImplication, but in the TcS monnad,
+checkConstraintsTcS :: SkolemInfo
+                    -> [TcTyVar]        -- Skolems
+                    -> TcS result
+                    -> TcS result
+-- Just like TcUnify.checkTvConstraints, but in the TcS monnad,
 -- using the work-list to gather the constraints
-buildImplication skol_info skol_tvs givens (TcS thing_inside)
-  = TcS $ \ env ->
+checkConstraintsTcS skol_info skol_tvs (TcS thing_inside)
+  = TcS $ \ tcs_env ->
     do { new_wl_var <- TcM.newTcRef emptyWorkList
-       ; tc_lvl <- TcM.getTcLevel
-       ; let new_tclvl = pushTcLevel tc_lvl
+       ; let new_tcs_env = tcs_env { tcs_worklist = new_wl_var }
 
-       ; res <- TcM.setTcLevel new_tclvl $
-                thing_inside (env { tcs_worklist = new_wl_var })
+       ; (res, new_tclvl) <- TcM.pushTcLevelM $
+                             thing_inside new_tcs_env
 
        ; wl@WL { wl_eqs = eqs } <- TcM.readTcRef new_wl_var
-       ; if null eqs
-         then return (emptyBag, emptyTcEvBinds, res)
-         else
-    do { env <- TcM.getLclEnv
-       ; ev_binds_var <- TcM.newTcEvBinds
-       ; let wc  = ASSERT2( null (wl_funeqs wl) && null (wl_rest wl) &&
-                            null (wl_deriv wl) && null (wl_implics wl), ppr wl )
-                   WC { wc_simple = listToCts eqs
-                      , wc_impl   = emptyBag }
-             imp = newImplication { ic_tclvl  = new_tclvl
-                                  , ic_skols  = skol_tvs
-                                  , ic_given  = givens
-                                  , ic_wanted = wc
-                                  , ic_binds  = ev_binds_var
-                                  , ic_env    = env
-                                  , ic_info   = skol_info }
-      ; return (unitBag imp, TcEvBinds ev_binds_var, res) } }
+       ; ASSERT2( null (wl_funeqs wl) && null (wl_rest wl) &&
+                  null (wl_implics wl), ppr wl )
+         unless (null eqs) $
+         do { tcl_env <- TcM.getLclEnv
+            ; ev_binds_var <- TcM.newNoTcEvBinds
+            ; let wc  = WC { wc_simple = listToCts eqs
+                           , wc_impl   = emptyBag }
+                  imp = newImplication { ic_tclvl  = new_tclvl
+                                       , ic_skols  = skol_tvs
+                                       , ic_wanted = wc
+                                       , ic_binds  = ev_binds_var
+                                       , ic_env    = tcl_env
+                                       , ic_info   = skol_info }
+
+           -- Add the implication to the work-list
+           ; TcM.updTcRef (tcs_worklist tcs_env)
+                          (extendWorkListImplic (unitBag imp)) }
+
+      ; return res }
 
 {-
 Note [Propagate the solved dictionaries]
@@ -2741,9 +2798,7 @@ getWorkListImplics
 updWorkListTcS :: (WorkList -> WorkList) -> TcS ()
 updWorkListTcS f
   = do { wl_var <- getTcSWorkListRef
-       ; wl_curr <- wrapTcS (TcM.readTcRef wl_var)
-       ; let new_work = f wl_curr
-       ; wrapTcS (TcM.writeTcRef wl_var new_work) }
+       ; wrapTcS (TcM.updTcRef wl_var f)}
 
 emitWorkNC :: [CtEvidence] -> TcS ()
 emitWorkNC evs
@@ -2857,11 +2912,6 @@ checkWellStagedDFun pred dfun_id loc
 pprEq :: TcType -> TcType -> SDoc
 pprEq ty1 ty2 = pprParendType ty1 <+> char '~' <+> pprParendType ty2
 
-isTouchableMetaTyVarTcS :: TcTyVar -> TcS Bool
-isTouchableMetaTyVarTcS tv
-  = do { tclvl <- getTcLevel
-       ; return $ isTouchableMetaTyVar tclvl tv }
-
 isFilledMetaTyVar_maybe :: TcTyVar -> TcS (Maybe Type)
 isFilledMetaTyVar_maybe tv
  = case tcTyVarDetails tv of
@@ -2899,6 +2949,8 @@ zonkSimples cts = wrapTcS (TcM.zonkSimples cts)
 zonkWC :: WantedConstraints -> TcS WantedConstraints
 zonkWC wc = wrapTcS (TcM.zonkWC wc)
 
+zonkTcTyCoVarBndr :: TcTyCoVar -> TcS TcTyCoVar
+zonkTcTyCoVarBndr tv = wrapTcS (TcM.zonkTcTyCoVarBndr tv)
 
 {- *********************************************************************
 *                                                                      *
@@ -2991,6 +3043,51 @@ demoteUnfilledFmv fmv
                    do { tv_ty <- TcM.newFlexiTyVarTy (tyVarKind fmv)
                       ; TcM.writeMetaTyVar fmv tv_ty } }
 
+-----------------------------
+dischargeFunEq :: CtEvidence -> TcTyVar -> TcCoercion -> TcType -> TcS ()
+-- (dischargeFunEqCan ev tv co ty)
+--     Preconditions
+--       - ev :: F tys ~ tv   is a CFunEqCan
+--       - tv is a FlatMetaTv of FlatSkolTv
+--       - co :: F tys ~ xi
+--       - fmv/fsk `notElem` xi
+--       - fmv not filled (for Wanteds)
+--
+-- Then for [W] or [WD], we actually fill in the fmv:
+--      set fmv := xi,
+--      set ev  := co
+--      kick out any inert things that are now rewritable
+--
+-- For [D], we instead emit an equality that must ultimately hold
+--      [D] xi ~ fmv
+--      Does not evaluate 'co' if 'ev' is Derived
+--
+-- For [G], emit this equality
+--     [G] (sym ev; co) :: fsk ~ xi
+
+-- See TcFlatten Note [The flattening story],
+-- especially "Ownership of fsk/fmv"
+dischargeFunEq (CtGiven { ctev_evar = old_evar, ctev_loc = loc }) fsk co xi
+  = do { new_ev <- newGivenEvVar loc ( new_pred, evCoercion new_co  )
+       ; emitWorkNC [new_ev] }
+  where
+    new_pred = mkPrimEqPred (mkTyVarTy fsk) xi
+    new_co   = mkTcSymCo (mkTcCoVarCo old_evar) `mkTcTransCo` co
+
+dischargeFunEq ev@(CtWanted { ctev_dest = dest }) fmv co xi
+  = ASSERT2( not (fmv `elemVarSet` tyCoVarsOfType xi), ppr ev $$ ppr fmv $$ ppr xi )
+    do { setWantedEvTerm dest (EvExpr (evCoercion co))
+       ; unflattenFmv fmv xi
+       ; n_kicked <- kickOutAfterUnification fmv
+       ; traceTcS "dischargeFmv" (ppr fmv <+> equals <+> ppr xi $$ pprKicked n_kicked) }
+
+dischargeFunEq (CtDerived { ctev_loc = loc }) fmv _co xi
+  = emitNewDerivedEq loc Nominal xi (mkTyVarTy fmv)
+              -- FunEqs are always at Nominal role
+
+pprKicked :: Int -> SDoc
+pprKicked 0 = empty
+pprKicked n = parens (int n <+> text "kicked out")
 
 {- *********************************************************************
 *                                                                      *
@@ -3025,6 +3122,7 @@ instFlexiHelper subst tv
        ; let name = setNameUnique (tyVarName tv) uniq
              kind = substTyUnchecked subst (tyVarKind tv)
              ty'  = mkTyVarTy (mkTcTyVar name kind details)
+       ; TcM.traceTc "instFlexi" (ppr ty')
        ; return (extendTvSubst subst tv ty') }
 
 tcInstType :: ([TyVar] -> TcM (TCvSubst, [TcTyVar]))
@@ -3061,7 +3159,8 @@ setEvBind ev_bind
 -- | Mark variables as used filling a coercion hole
 useVars :: CoVarSet -> TcS ()
 useVars vars
-  = do { EvBindsVar { ebv_tcvs = ref } <- getTcEvBindsVar
+  = do { ev_binds_var <- getTcEvBindsVar
+       ; let ref = ebv_tcvs ev_binds_var
        ; wrapTcS $
          do { tcvs <- TcM.readTcRef ref
             ; let tcvs' = tcvs `unionVarSet` vars
@@ -3099,6 +3198,9 @@ setEvBindIfWanted ev tm
 
 newTcEvBinds :: TcS EvBindsVar
 newTcEvBinds = wrapTcS TcM.newTcEvBinds
+
+newNoTcEvBinds :: TcS EvBindsVar
+newNoTcEvBinds = wrapTcS TcM.newNoTcEvBinds
 
 newEvVar :: TcPredType -> TcS EvVar
 newEvVar pred = wrapTcS (TcM.newEvVar pred)
@@ -3184,12 +3286,6 @@ newWantedNC loc pty
   | otherwise
   = newWantedEvVarNC loc pty
 
-emitNewDerived :: CtLoc -> TcPredType -> TcS ()
-emitNewDerived loc pred
-  = do { ev <- newDerivedNC loc pred
-       ; traceTcS "Emitting new derived" (ppr ev)
-       ; updWorkListTcS (extendWorkListDerived loc ev) }
-
 emitNewDeriveds :: CtLoc -> [TcPredType] -> TcS ()
 emitNewDeriveds loc preds
   | null preds
@@ -3197,7 +3293,7 @@ emitNewDeriveds loc preds
   | otherwise
   = do { evs <- mapM (newDerivedNC loc) preds
        ; traceTcS "Emitting new deriveds" (ppr evs)
-       ; updWorkListTcS (extendWorkListDeriveds loc evs) }
+       ; updWorkListTcS (extendWorkListDeriveds evs) }
 
 emitNewDerivedEq :: CtLoc -> Role -> TcType -> TcType -> TcS ()
 -- Create new equality Derived and put it in the work list
@@ -3206,7 +3302,7 @@ emitNewDerivedEq loc role ty1 ty2
   = do { ev <- newDerivedNC loc (mkPrimEqPredRole role ty1 ty2)
        ; traceTcS "Emitting new derived equality" (ppr ev $$ pprCtLoc loc)
        ; updWorkListTcS (extendWorkListEq (mkNonCanonical ev)) }
-         -- Very important: put in the wl_eqs, /not/ wl_derivs
+         -- Very important: put in the wl_eqs
          -- See Note [Prioritise equalities] (Avoiding fundep iteration)
 
 newDerivedNC :: CtLoc -> TcPredType -> TcS CtEvidence
@@ -3255,4 +3351,3 @@ from which we get the implication
    (forall a. t1 ~ t2)
 See TcSMonad.deferTcSForAllEq
 -}
-

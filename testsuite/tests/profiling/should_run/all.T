@@ -36,10 +36,10 @@ test('T3001', [only_ways(['prof_hb']), extra_ways(['prof_hb'])],
 test('T3001-2', [only_ways(['prof_hb']), extra_ways(['prof_hb'])],
      compile_and_run, ['-package bytestring'])
 
-# As with ioprof001, the unoptimised profile is different but
-# not badly wrong (CAF attribution is different).
+# For profasm/profthreaded, the answer is correct but the ordering of some
+# lines in the output happen to be different, so we just skip them.
 test('scc001',
-     [expect_broken_for_10037, expect_broken_for(14705, ['ghci-ext-prof'])],
+     omit_ways(['profasm', 'profthreaded']),
      compile_and_run,
      ['-fno-state-hack -fno-full-laziness']) # Note [consistent stacks]
 
@@ -108,9 +108,7 @@ test('callstack002',
      ['-fprof-auto-calls -fno-full-laziness -fno-state-hack'])
 
 # Should not stack overflow with -prof -fprof-auto
-test('T5363',
-     [expect_broken_for(14705, ['ghci-ext-prof'])],
-     compile_and_run, [''])
+test('T5363', [], compile_and_run, [''])
 
 test('profinline001', [], compile_and_run, [''])
 

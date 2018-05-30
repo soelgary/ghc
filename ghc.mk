@@ -420,7 +420,7 @@ else # CLEANING
 # programs such as GHC and ghc-pkg, that we do not assume the stage0
 # compiler already has installed (or up-to-date enough).
 
-PACKAGES_STAGE0 = binary text transformers mtl parsec Cabal/Cabal hpc ghc-boot-th ghc-boot template-haskell ghci
+PACKAGES_STAGE0 = binary text transformers mtl parsec Cabal/Cabal hpc ghc-boot-th ghc-boot template-haskell ghc-heap ghci
 ifeq "$(Windows_Host)" "NO"
 PACKAGES_STAGE0 += terminfo
 endif
@@ -459,6 +459,7 @@ PACKAGES_STAGE1 += ghc-boot-th
 PACKAGES_STAGE1 += ghc-boot
 PACKAGES_STAGE1 += template-haskell
 PACKAGES_STAGE1 += ghc-compact
+PACKAGES_STAGE1 += ghc-heap
 
 ifeq "$(HADDOCK_DOCS)" "YES"
 PACKAGES_STAGE1 += xhtml
@@ -1449,6 +1450,16 @@ distclean : clean
 # Don't delete 'inplace' itself, it contains source files.
 	$(call removeTrees,inplace/mingw)
 	$(call removeTrees,inplace/perl)
+
+# Remove the fs utilities.
+	$(call removeFiles,utils/lndir/fs.h)
+	$(call removeFiles,utils/lndir/fs.c)
+	$(call removeFiles,utils/unlit/fs.h)
+	$(call removeFiles,utils/unlit/fs.c)
+	$(call removeFiles,rts/fs.h)
+	$(call removeFiles,rts/fs.c)
+	$(call removeFiles,libraries/base/include/fs.h)
+	$(call removeFiles,libraries/base/cbits/fs.c)
 
 maintainer-clean : distclean
 	$(call removeFiles,configure mk/config.h.in)

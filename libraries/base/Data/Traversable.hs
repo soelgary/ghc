@@ -60,7 +60,8 @@ import Data.Foldable ( Foldable )
 import Data.Functor
 import Data.Functor.Identity ( Identity(..) )
 import Data.Functor.Utils ( StateL(..), StateR(..) )
-import Data.Monoid ( Dual(..), Sum(..), Product(..), First(..), Last(..) )
+import Data.Monoid ( Dual(..), Sum(..), Product(..),
+                     First(..), Last(..), Alt(..), Ap(..) )
 import Data.Proxy ( Proxy(..) )
 
 import GHC.Arr
@@ -289,11 +290,21 @@ instance Traversable First where
 instance Traversable Last where
     traverse f (Last x) = Last <$> traverse f x
 
+-- | @since 4.12.0.0
+instance (Traversable f) => Traversable (Alt f) where
+    traverse f (Alt x) = Alt <$> traverse f x
+
+-- | @since 4.12.0.0
+instance (Traversable f) => Traversable (Ap f) where
+    traverse f (Ap x) = Ap <$> traverse f x
+
 -- | @since 4.9.0.0
 instance Traversable ZipList where
     traverse f (ZipList x) = ZipList <$> traverse f x
 
+-- | @since 4.9.0.0
 deriving instance Traversable Identity
+
 
 -- Instances for GHC.Generics
 -- | @since 4.9.0.0
@@ -307,19 +318,46 @@ instance Traversable U1 where
     sequence _ = pure U1
     {-# INLINE sequence #-}
 
+-- | @since 4.9.0.0
 deriving instance Traversable V1
+
+-- | @since 4.9.0.0
 deriving instance Traversable Par1
+
+-- | @since 4.9.0.0
 deriving instance Traversable f => Traversable (Rec1 f)
+
+-- | @since 4.9.0.0
 deriving instance Traversable (K1 i c)
+
+-- | @since 4.9.0.0
 deriving instance Traversable f => Traversable (M1 i c f)
+
+-- | @since 4.9.0.0
 deriving instance (Traversable f, Traversable g) => Traversable (f :+: g)
+
+-- | @since 4.9.0.0
 deriving instance (Traversable f, Traversable g) => Traversable (f :*: g)
+
+-- | @since 4.9.0.0
 deriving instance (Traversable f, Traversable g) => Traversable (f :.: g)
+
+-- | @since 4.9.0.0
 deriving instance Traversable UAddr
+
+-- | @since 4.9.0.0
 deriving instance Traversable UChar
+
+-- | @since 4.9.0.0
 deriving instance Traversable UDouble
+
+-- | @since 4.9.0.0
 deriving instance Traversable UFloat
+
+-- | @since 4.9.0.0
 deriving instance Traversable UInt
+
+-- | @since 4.9.0.0
 deriving instance Traversable UWord
 
 -- general functions
