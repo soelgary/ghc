@@ -212,6 +212,7 @@
 #define ThreadInterpret 2       /* interpret this thread */
 #define ThreadKilled    3       /* thread has died, don't run it */
 #define ThreadComplete  4       /* thread has finished */
+#define ThreadDone      5       /* thread is completed and has been handled */
 
 /*
  * Constants for the why_blocked field of a TSO

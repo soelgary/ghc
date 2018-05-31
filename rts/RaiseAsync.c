@@ -785,6 +785,8 @@ raiseAsync(Capability *cap, StgTSO *tso, StgClosure *exception,
     uint32_t i;
     StgStack *stack;
 
+    bool has_catch_frame = false;
+
     debugTraceCap(DEBUG_sched, cap,
                   "raising exception in thread %ld.", (long)tso->id);
 
@@ -962,6 +964,8 @@ raiseAsync(Capability *cap, StgTSO *tso, StgClosure *exception,
             StgCatchFrame *cf = (StgCatchFrame *)frame;
             StgThunk *raise;
 
+            has_catch_frame = true;
+
             if (exception == NULL) break;
 
             // we've got an exception to raise, so let's pass it to the
@@ -1093,6 +1097,11 @@ raiseAsync(Capability *cap, StgTSO *tso, StgClosure *exception,
 
 done:
     IF_DEBUG(sanity, checkTSO(tso));
+
+    if ((exception == NULL || !has_catch_frame) && tso->isHThread)  {
+      cap->n_hrun_queue--;
+      printf("One less hthread bc it was killed\n");
+    }
 
     // wake it up
     if (tso->why_blocked != NotBlocked) {

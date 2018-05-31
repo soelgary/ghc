@@ -129,6 +129,11 @@ createThread(Capability *cap, W_ size)
     g0->threads = tso;
     RELEASE_LOCK(&sched_mutex);
 
+    tso->parent = END_TSO_QUEUE;
+    tso->hlink = END_TSO_QUEUE;
+    tso->children = END_TSO_QUEUE;
+    tso->isHThread = false;
+
     // ToDo: report the stack size in the event?
     traceEventCreateThread(cap, tso);
 

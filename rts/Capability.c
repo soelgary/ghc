@@ -254,6 +254,7 @@ initCapability (Capability *cap, uint32_t i)
     cap->run_queue_hd      = END_TSO_QUEUE;
     cap->run_queue_tl      = END_TSO_QUEUE;
     cap->n_run_queue       = 0;
+    cap->n_hrun_queue      = 0;
 
 #if defined(THREADED_RTS)
     initMutex(&cap->lock);
@@ -315,6 +316,10 @@ initCapability (Capability *cap, uint32_t i)
     // cap->r.rCurrentTSO is charged for calls to allocate(), so we
     // don't want it set when not running a Haskell thread.
     cap->r.rCurrentTSO = NULL;
+
+    cap->hrun_queue_current = END_TSO_QUEUE;
+    cap->hrun_queue_top = END_TSO_QUEUE;
+    cap->n_hrun_queue = 0;
 
     traceCapCreate(cap);
     traceCapsetAssignCap(CAPSET_OSPROCESS_DEFAULT, i);
@@ -555,9 +560,12 @@ releaseCapability_ (Capability* cap,
         // is interrupted, we only create a worker task if there
         // are threads that need to be completed.  If the system is
         // shutting down, we never create a new worker.
+        
+        printf("h run queue size: %d\n", cap->n_hrun_queue);
         if (sched_state < SCHED_SHUTTING_DOWN || !emptyRunQueue(cap)) {
             debugTrace(DEBUG_sched,
                        "starting new worker on capability %d", cap->no);
+            printf("Starting worker task bc spare workers\n");
             startWorkerTask(cap);
             return;
         }
@@ -1098,6 +1106,14 @@ shutdownCapability (Capability *cap USED_IF_THREADS,
     // we now have the Capability, its run queue and spare workers
     // list are both empty.
 
+    /*
+      We need to empty the hierarchical queue here since all threads are done.
+      The hqueue is going to be used again to create shutdown threads.
+    */
+    cap->hrun_queue_current = END_TSO_QUEUE;
+    cap->hrun_queue_top = END_TSO_QUEUE;
+    cap->n_hrun_queue = 0;
+
     // ToDo: we can't drop this mutex, because there might still be
     // threads performing foreign calls that will eventually try to
     // return via resumeThread() and attempt to grab cap->lock.
@@ -1129,6 +1145,7 @@ freeCapability (Capability *cap)
     traceCapsetRemoveCap(CAPSET_OSPROCESS_DEFAULT, cap->no);
     traceCapsetRemoveCap(CAPSET_CLOCKDOMAIN_DEFAULT, cap->no);
     traceCapDelete(cap);
+    ASSERT(cap->n_hrun_queue == 0);
 }
 
 void
@@ -1168,6 +1185,8 @@ markCapability (evac_fn evac, void *user, Capability *cap,
     // thread's index plus a multiple of the number of GC threads.
     evac(user, (StgClosure **)(void *)&cap->run_queue_hd);
     evac(user, (StgClosure **)(void *)&cap->run_queue_tl);
+    evac(user, (StgClosure **)(void *)&cap->hrun_queue_current);
+    evac(user, (StgClosure **)(void *)&cap->hrun_queue_top);
 #if defined(THREADED_RTS)
     evac(user, (StgClosure **)(void *)&cap->inbox);
 #endif

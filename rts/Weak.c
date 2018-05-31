@@ -143,8 +143,12 @@ scheduleFinalizers(Capability *cap, StgWeak *list)
     for (i = n; i < size; i++) {
         arr->payload[i] = (StgClosure *)(W_)(-1);
     }
+    
+    // TODO HS: Probably shouldnt be END_TSO_QUEUE
+    StgTSO *parent = END_TSO_QUEUE;
 
     t = createIOThread(cap,
+                       parent,
                        RtsFlags.GcFlags.initialStkSize,
                        rts_apply(cap,
                            rts_apply(cap,

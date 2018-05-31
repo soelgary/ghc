@@ -466,6 +466,11 @@ run_thread:
         ret = r->rRet;
         break;
     }
+    case ThreadDone:
+    {
+      ret = ThreadYielding;
+      break;
+    }
 
     case ThreadInterpret:
         cap = interpretBCO(cap);
@@ -1204,7 +1209,7 @@ scheduleHandleYield( Capability *cap, StgTSO *t, uint32_t prev_what_next )
 
     // Shortcut if we're just switching evaluators: just run the thread.  See
     // Note [avoiding threadPaused] in Interpreter.c.
-    if (t->what_next != prev_what_next) {
+    if (t->what_next != prev_what_next /*&& t->what_next != ThreadDone*/) {
         debugTrace(DEBUG_sched,
                    "--<< thread %ld (%s) stopped to switch evaluators",
                    (long)t->id, what_next_strs[t->what_next]);
@@ -1306,6 +1311,13 @@ scheduleHandleThreadFinished (Capability *cap STG_UNUSED, Task *task, StgTSO *t)
           }
 
           ASSERT(task->incall->tso == t);
+
+          // Remove 1 from n_hrun_queue if the completed tso was on it
+          if (t->isHThread) {
+            cap->n_hrun_queue--;
+            printf("One less hthread bc it terminated\n");
+            //t->what_next = ThreadDone;
+          }
 
           if (t->what_next == ThreadComplete) {
               if (task->incall->ret) {
@@ -2589,8 +2601,9 @@ startWorkerTasks (uint32_t from USED_IF_THREADS, uint32_t to USED_IF_THREADS)
 #if defined(THREADED_RTS)
     uint32_t i;
     Capability *cap;
-
+    printf("Starting tasks... from=%d, to=%d\n", from, to);
     for (i = from; i < to; i++) {
+        printf("da fck\n");
         cap = capabilities[i];
         ACQUIRE_LOCK(&cap->lock);
         startWorkerTask(cap);
@@ -2611,6 +2624,7 @@ startWorkerTasks (uint32_t from USED_IF_THREADS, uint32_t to USED_IF_THREADS)
 void
 initScheduler(void)
 {
+  printf("INIT SCHED: %d\n", n_capabilities);
 #if !defined(THREADED_RTS)
   blocked_queue_hd  = END_TSO_QUEUE;
   blocked_queue_tl  = END_TSO_QUEUE;
@@ -2644,7 +2658,9 @@ initScheduler(void)
    * bound thread on Capability 0 pretty soon, so we don't want a
    * worker task hogging it.
    */
+  printf("Numcaps: %d\n", n_capabilities);
   startWorkerTasks(1, n_capabilities);
+  printf("Done\n");
 
   RELEASE_LOCK(&sched_mutex);
 

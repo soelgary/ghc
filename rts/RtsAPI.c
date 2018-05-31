@@ -384,20 +384,42 @@ INLINE_HEADER void pushClosure   (StgTSO *tso, StgWord c) {
 }
 
 StgTSO *
-createGenThread (Capability *cap, W_ stack_size,  StgClosure *closure)
+createGenThread (Capability *cap, StgTSO *parent, W_ stack_size,  StgClosure *closure)
 {
   StgTSO *t;
   t = createThread (cap, stack_size);
+  if (parent != END_TSO_QUEUE) {
+    t->parent = parent;
+    t->hlink = parent->children;
+    parent->children = t;
+  } else if (parent == END_TSO_QUEUE) {
+    cap->hrun_queue_top = t;
+  }
+  t->children = END_TSO_QUEUE;
+  t->isHThread = true;
+  cap->n_hrun_queue++;
+  ASSERT(cap->hrun_queue_top != END_TSO_QUEUE && cap->hrun_queue_top != NULL);
   pushClosure(t, (W_)closure);
   pushClosure(t, (W_)&stg_enter_info);
   return t;
 }
 
 StgTSO *
-createIOThread (Capability *cap, W_ stack_size,  StgClosure *closure)
+createIOThread (Capability *cap, StgTSO *parent, W_ stack_size,  StgClosure *closure)
 {
   StgTSO *t;
   t = createThread (cap, stack_size);
+  if (parent != END_TSO_QUEUE) {
+    t->parent = parent;
+    t->hlink = parent->children;
+    parent->children = t;
+  } else if (parent == END_TSO_QUEUE) {
+    cap->hrun_queue_top = t;
+  }
+  t->children = END_TSO_QUEUE;
+  t->isHThread = true;
+  cap->n_hrun_queue++;
+  ASSERT(cap->hrun_queue_top != END_TSO_QUEUE && cap->hrun_queue_top != NULL);
   pushClosure(t, (W_)&stg_ap_v_info);
   pushClosure(t, (W_)closure);
   pushClosure(t, (W_)&stg_enter_info);
@@ -410,10 +432,21 @@ createIOThread (Capability *cap, W_ stack_size,  StgClosure *closure)
  */
 
 StgTSO *
-createStrictIOThread(Capability *cap, W_ stack_size,  StgClosure *closure)
+createStrictIOThread(Capability *cap, StgTSO *parent, W_ stack_size,  StgClosure *closure)
 {
   StgTSO *t;
   t = createThread(cap, stack_size);
+  if (parent != END_TSO_QUEUE) {
+    t->parent = parent;
+    t->hlink = parent->children;
+    parent->children = t;
+  } else if (parent == END_TSO_QUEUE) {
+    cap->hrun_queue_top = t;
+  }
+  t->children = END_TSO_QUEUE;
+  t->isHThread = true;
+  cap->n_hrun_queue++;
+  ASSERT(cap->hrun_queue_top != END_TSO_QUEUE && cap->hrun_queue_top != NULL);
   pushClosure(t, (W_)&stg_forceIO_info);
   pushClosure(t, (W_)&stg_ap_v_info);
   pushClosure(t, (W_)closure);
@@ -430,8 +463,9 @@ void rts_eval (/* inout */ Capability **cap,
                /* out */   HaskellObj *ret)
 {
     StgTSO *tso;
-
-    tso = createGenThread(*cap, RtsFlags.GcFlags.initialStkSize, p);
+    Capability *dcap = *cap;
+    StgTSO *parent = dcap->hrun_queue_current;
+    tso = createGenThread(*cap, parent, RtsFlags.GcFlags.initialStkSize, p);
     scheduleWaitThread(tso,ret,cap);
 }
 
@@ -441,8 +475,9 @@ void rts_eval_ (/* inout */ Capability **cap,
                 /* out   */ HaskellObj *ret)
 {
     StgTSO *tso;
-
-    tso = createGenThread(*cap, stack_size, p);
+    Capability *dcap = *cap;
+    StgTSO *parent = dcap->hrun_queue_current;
+    tso = createGenThread(*cap, parent, stack_size, p);
     scheduleWaitThread(tso,ret,cap);
 }
 
@@ -455,8 +490,9 @@ void rts_evalIO (/* inout */ Capability **cap,
                  /* out */   HaskellObj *ret)
 {
     StgTSO* tso;
-
-    tso = createStrictIOThread(*cap, RtsFlags.GcFlags.initialStkSize, p);
+    Capability *dcap = *cap;
+    StgTSO *parent = dcap->hrun_queue_current;
+    tso = createStrictIOThread(*cap, parent, RtsFlags.GcFlags.initialStkSize, p);
     scheduleWaitThread(tso,ret,cap);
 }
 
@@ -474,9 +510,12 @@ void rts_evalStableIOMain(/* inout */ Capability **cap,
     StgClosure *p, *r, *w;
     SchedulerStatus stat;
 
+    Capability *dcap = *cap;
+    StgTSO *parent = dcap->hrun_queue_current;
+
     p = (StgClosure *)deRefStablePtr(s);
     w = rts_apply(*cap, &base_GHCziTopHandler_runMainIO_closure, p);
-    tso = createStrictIOThread(*cap, RtsFlags.GcFlags.initialStkSize, w);
+    tso = createStrictIOThread(*cap, parent, RtsFlags.GcFlags.initialStkSize, w);
     // async exceptions are always blocked by default in the created
     // thread.  See #1048.
     tso->flags |= TSO_BLOCKEX | TSO_INTERRUPTIBLE;
@@ -503,8 +542,11 @@ void rts_evalStableIO (/* inout */ Capability **cap,
     StgClosure *p, *r;
     SchedulerStatus stat;
 
+    Capability *dcap = *cap;
+    StgTSO *parent = dcap->hrun_queue_current;
+
     p = (StgClosure *)deRefStablePtr(s);
-    tso = createStrictIOThread(*cap, RtsFlags.GcFlags.initialStkSize, p);
+    tso = createStrictIOThread(*cap, parent, RtsFlags.GcFlags.initialStkSize, p);
     // async exceptions are always blocked by default in the created
     // thread.  See #1048.
     tso->flags |= TSO_BLOCKEX | TSO_INTERRUPTIBLE;
@@ -519,14 +561,20 @@ void rts_evalStableIO (/* inout */ Capability **cap,
 
 /*
  * Like rts_evalIO(), but doesn't force the action's result.
+ * Uses the hierarchical run queue
  */
 void rts_evalLazyIO (/* inout */ Capability **cap,
                      /* in    */ HaskellObj p,
                      /* out */   HaskellObj *ret)
 {
     StgTSO *tso;
+    Capability *dcap = *cap;
 
-    tso = createIOThread(*cap, RtsFlags.GcFlags.initialStkSize, p);
+    // TODO HS: It is not necessarily clear that we want to make the current the
+    //          parent.
+    StgTSO *parent = dcap->hrun_queue_current;
+
+    tso = createIOThread(*cap, parent, RtsFlags.GcFlags.initialStkSize, p);
     scheduleWaitThread(tso,ret,cap);
 }
 
@@ -536,8 +584,13 @@ void rts_evalLazyIO_ (/* inout */ Capability **cap,
                       /* out   */ HaskellObj *ret)
 {
     StgTSO *tso;
+    Capability *dcap = *cap;
 
-    tso = createIOThread(*cap, stack_size, p);
+    // TODO HS: It is not necessarily clear that we want to make the current the
+    //          parent.
+    StgTSO *parent = dcap->hrun_queue_current;
+
+    tso = createIOThread(*cap, parent, stack_size, p);
     scheduleWaitThread(tso,ret,cap);
 }
 

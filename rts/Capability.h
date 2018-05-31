@@ -66,6 +66,7 @@ struct Capability_ {
     StgTSO *run_queue_hd;
     StgTSO *run_queue_tl;
     uint32_t n_run_queue;
+    uint32_t n_hrun_queue;
 
     // Tasks currently making safe foreign calls.  Doubly-linked.
     // When returning, a task first acquires the Capability before
@@ -111,6 +112,9 @@ struct Capability_ {
     // Total words allocated by this cap since rts start
     // See [Note allocation accounting] in Storage.c
     W_ total_allocated;
+
+    StgTSO *hrun_queue_top;
+    StgTSO *hrun_queue_current;
 
 #if defined(THREADED_RTS)
     // Worker Tasks waiting in the wings.  Singly-linked.

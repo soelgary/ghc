@@ -129,6 +129,7 @@ appendToRunQueue (Capability *cap, StgTSO *tso);
 EXTERN_INLINE void
 appendToRunQueue (Capability *cap, StgTSO *tso)
 {
+    if (tso->isHThread) return;
     ASSERT(tso->_link == END_TSO_QUEUE);
     if (cap->run_queue_hd == END_TSO_QUEUE) {
         cap->run_queue_hd = tso;
@@ -150,6 +151,7 @@ pushOnRunQueue (Capability *cap, StgTSO *tso);
 EXTERN_INLINE void
 pushOnRunQueue (Capability *cap, StgTSO *tso)
 {
+    if (tso->isHThread) return;
     setTSOLink(cap, tso, cap->run_queue_hd);
     tso->block_info.prev = END_TSO_QUEUE;
     if (cap->run_queue_hd != END_TSO_QUEUE) {
@@ -162,12 +164,87 @@ pushOnRunQueue (Capability *cap, StgTSO *tso)
     cap->n_run_queue++;
 }
 
+
+EXTERN_INLINE StgTSO *
+nextHThread (Capability *cap);
+
+EXTERN_INLINE StgTSO *
+nextHThread (Capability *cap)
+{
+  StgTSO *next = END_TSO_QUEUE;
+  StgTSO *current = cap->hrun_queue_current;
+
+  // An Hthread has not been scheduled yet
+  if (cap->hrun_queue_current == END_TSO_QUEUE) {
+    debugTrace(DEBUG_sched, "HQUEUE: No one has been scheduled");
+    if (cap->hrun_queue_top == END_TSO_QUEUE) {
+      barf("Top is the end of the run queue");
+    }
+    return cap->hrun_queue_top;
+  }
+
+  /*
+    Algorithm:
+      1. If the tso has a child, it is next
+      2. If the tso does not have a child and has a sibling, the sibling is next
+      3. If the tso does not have a child or a sibling then...
+        a. let current = tso->parent
+        b. if current has a sibling, schedule it
+        c. else if current does not have a parent, schedule it
+        c. else jump to (a)
+  */
+
+  if (current->children != END_TSO_QUEUE) {
+    debugTrace(DEBUG_sched, "HQUEUE: Found a child");
+    next = current->children;
+  } else if (current->hlink != END_TSO_QUEUE) {
+    debugTrace(DEBUG_sched, "HQUEUE: Found a sibling");
+    next = current->hlink;
+  } else {
+    while (1) {
+      if (current->parent == END_TSO_QUEUE) {
+        debugTrace(DEBUG_sched, "HQUEUE: Found the top");
+        next = current;
+        break;
+      } else if (current->hlink != END_TSO_QUEUE) {
+        debugTrace(DEBUG_sched, "HQUEUE: Found a sibling 2");
+        next = current->hlink;
+        break;
+      } else {
+        debugTrace(DEBUG_sched, "HQUEUE: Following a parent");
+        current = current->parent;
+      }
+    }
+  }
+  return next;
+}
+
+EXTERN_INLINE void
+popRunQueueH (Capability *cap);
+
+EXTERN_INLINE void
+popRunQueueH (Capability *cap)
+{
+  StgTSO *next = nextHThread(cap);
+  debugTrace(DEBUG_sched, "HSched: Queueing up TSO %d", next->id);
+  ASSERT(next != END_TSO_QUEUE);
+  if (next == END_TSO_QUEUE) {
+    barf("Badd stuff");
+  }
+  cap->hrun_queue_current = next;
+}
+
+
 /* Pop the first thread off the runnable queue.
  */
 INLINE_HEADER StgTSO *
 popRunQueue (Capability *cap)
 {
-    StgTSO *t = cap->run_queue_hd;
+   /* StgTSO *t = cap->run_queue_hd;
+    if (t == END_TSO_QUEUE) {
+      //popRunQueueH(cap);
+      //return cap->hrun_queue_current;
+    }
     ASSERT(t != END_TSO_QUEUE);
     cap->run_queue_hd = t->_link;
     if (t->_link != END_TSO_QUEUE) {
@@ -178,13 +255,29 @@ popRunQueue (Capability *cap)
         cap->run_queue_tl = END_TSO_QUEUE;
     }
     cap->n_run_queue--;
-    return t;
+    */
+    //if (cap->hrun_queue_current == END_TSO_QUEUE) {
+    //  popRunQueueH(cap, t);
+    //}
+    popRunQueueH(cap);
+    return cap->hrun_queue_current;
+    //return t;
 }
+
+INLINE_HEADER StgTSO *
+peekRunQueueH (Capability *cap)
+{
+    return nextHThread(cap);
+}
+
 
 INLINE_HEADER StgTSO *
 peekRunQueue (Capability *cap)
 {
-    return cap->run_queue_hd;
+  //if (cap->run_queue_hd != END_TSO_QUEUE) {
+    //return cap->run_queue_hd;
+  //}
+  return peekRunQueueH(cap);
 }
 
 void promoteInRunQueue (Capability *cap, StgTSO *tso);
@@ -214,9 +307,16 @@ emptyQueue (StgTSO *q)
 }
 
 INLINE_HEADER bool
+emptyRunQueueH(Capability *cap)
+{
+    return cap->n_hrun_queue == 0 || cap->hrun_queue_top == END_TSO_QUEUE;
+}
+
+INLINE_HEADER bool
 emptyRunQueue(Capability *cap)
 {
-    return cap->n_run_queue == 0;
+    return emptyRunQueueH(cap);
+    //return cap->n_run_queue == 0;// && emptyRunQueueH(cap);
 }
 
 INLINE_HEADER void

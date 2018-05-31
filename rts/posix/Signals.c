@@ -472,8 +472,12 @@ startSignalHandlers(Capability *cap)
            // freed by runHandler
     memcpy(info, next_pending_handler, sizeof(siginfo_t));
 
+    // TODO HS: Should be the current running thread
+    StgTSO *parent = END_TSO_QUEUE;
+
     StgTSO *t =
         createIOThread(cap,
+                       parent,
                        RtsFlags.GcFlags.initialStkSize,
                        rts_apply(cap,
                                  rts_apply(cap,

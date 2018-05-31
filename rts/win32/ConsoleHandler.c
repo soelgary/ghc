@@ -181,6 +181,9 @@ void startSignalHandlers(Capability *cap)
     ACQUIRE_LOCK(&sched_mutex);
 
     handler = deRefStablePtr((StgStablePtr)console_handler);
+
+    // TODO HS: Should be the current running thread
+    StgTSO *parent = END_TSO_QUEUE;
     while (stg_pending_events > 0) {
         stg_pending_events--;
         StgTSO *t =

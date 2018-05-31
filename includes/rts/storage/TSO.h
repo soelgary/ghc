@@ -173,6 +173,11 @@ typedef struct StgTSO_ {
      */
     StgWord32  tot_stack_size;
 
+    StgTSO *children;
+    StgTSO *hlink;
+    StgTSO *parent;
+    bool isHThread;
+
 #if defined(TICKY_TICKY)
     /* TICKY-specific stuff would go here. */
 #endif
