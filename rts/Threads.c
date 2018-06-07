@@ -133,6 +133,7 @@ createThread(Capability *cap, W_ size)
     tso->hlink = END_TSO_QUEUE;
     tso->children = END_TSO_QUEUE;
     tso->isHThread = false;
+    tso->isDone = false;
 
     // ToDo: report the stack size in the event?
     traceEventCreateThread(cap, tso);

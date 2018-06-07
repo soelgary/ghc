@@ -473,7 +473,7 @@ startSignalHandlers(Capability *cap)
     memcpy(info, next_pending_handler, sizeof(siginfo_t));
 
     // TODO HS: Should be the current running thread
-    StgTSO *parent = END_TSO_QUEUE;
+    StgTSO *parent = cap->hrun_queue_current;
 
     StgTSO *t =
         createIOThread(cap,

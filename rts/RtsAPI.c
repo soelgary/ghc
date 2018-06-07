@@ -405,7 +405,7 @@ createGenThread (Capability *cap, StgTSO *parent, W_ stack_size,  StgClosure *cl
 }
 
 StgTSO *
-createIOThread (Capability *cap, StgTSO *parent, W_ stack_size,  StgClosure *closure)
+createIOThread (Capability *cap, __attribute__((unused)) StgTSO *parent, W_ stack_size,  StgClosure *closure)
 {
   StgTSO *t;
   t = createThread (cap, stack_size);
@@ -684,6 +684,7 @@ rts_unlock (Capability *cap)
     // random point in the future, which causes problems for
     // freeTaskManager().
     ACQUIRE_LOCK(&cap->lock);
+    printf("acquired 1\n");
     releaseCapability_(cap,false);
 
     // Finally, we can release the Task to the free list.
@@ -752,6 +753,7 @@ void hs_try_putmvar (/* in */ int capability,
 #else
 
     ACQUIRE_LOCK(&cap->lock);
+    printf("acquired 2\n");
     // If the capability is free, we can perform the tryPutMVar immediately
     if (cap->running_task == NULL) {
         cap->running_task = task;

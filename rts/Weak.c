@@ -145,7 +145,7 @@ scheduleFinalizers(Capability *cap, StgWeak *list)
     }
     
     // TODO HS: Probably shouldnt be END_TSO_QUEUE
-    StgTSO *parent = END_TSO_QUEUE;
+    StgTSO *parent = cap->hrun_queue_current;
 
     t = createIOThread(cap,
                        parent,

@@ -1100,7 +1100,6 @@ done:
 
     if ((exception == NULL || !has_catch_frame) && tso->isHThread)  {
       cap->n_hrun_queue--;
-      printf("One less hthread bc it was killed\n");
     }
 
     // wake it up

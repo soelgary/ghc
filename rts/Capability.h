@@ -115,6 +115,7 @@ struct Capability_ {
 
     StgTSO *hrun_queue_top;
     StgTSO *hrun_queue_current;
+    StgTSO *hlast_run;
 
 #if defined(THREADED_RTS)
     // Worker Tasks waiting in the wings.  Singly-linked.

@@ -177,6 +177,7 @@ typedef struct StgTSO_ {
     StgTSO *hlink;
     StgTSO *parent;
     bool isHThread;
+    bool isDone;
 
 #if defined(TICKY_TICKY)
     /* TICKY-specific stuff would go here. */

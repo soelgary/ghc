@@ -319,6 +319,7 @@ initCapability (Capability *cap, uint32_t i)
 
     cap->hrun_queue_current = END_TSO_QUEUE;
     cap->hrun_queue_top = END_TSO_QUEUE;
+    cap->hlast_run = END_TSO_QUEUE;
     cap->n_hrun_queue = 0;
 
     traceCapCreate(cap);
@@ -522,6 +523,7 @@ releaseCapability_ (Capability* cap,
     // Check to see whether a worker thread can be given
     // the go-ahead to return the result of an external call..
     if (cap->n_returning_tasks != 0) {
+        printf("Giving cap to returning task %p\n", cap->returning_tasks_hd);
         giveCapabilityToTask(cap,cap->returning_tasks_hd);
         // The Task pops itself from the queue (see waitForCapability())
         return;
@@ -539,11 +541,14 @@ releaseCapability_ (Capability* cap,
     PendingSync *sync = pending_sync;
     if (sync && (sync->type != SYNC_GC_PAR || sync->idle[cap->no])) {
         debugTrace(DEBUG_sched, "sync pending, freeing capability %d", cap->no);
+        printf("Sync pending....\n");
         return;
     }
 
     // If the next thread on the run queue is a bound thread,
     // give this Capability to the appropriate Task.
+    printf("Run queue size: %d\n", countChildren(cap->hrun_queue_top));
+    printf("CAPPEEK: %d\n", peekRunQueue(cap)->id);
     if (!emptyRunQueue(cap) && peekRunQueue(cap)->bound) {
         // Make sure we're not about to try to wake ourselves up
         // ASSERT(task != cap->run_queue_hd->bound);
@@ -551,8 +556,16 @@ releaseCapability_ (Capability* cap,
         // ThreadBlocked, but the thread may be back on the run queue
         // by now.
         task = peekRunQueue(cap)->bound->task;
+        printf("Giving cap to task %p\n", task);
         giveCapabilityToTask(cap, task);
         return;
+    }
+
+    if (cap->hlast_run != END_TSO_QUEUE) {
+      task = cap->hlast_run->bound->task;
+      printf("Giving cap to task bc last run %p\n", task);
+      giveCapabilityToTask(cap, task);
+      return;
     }
 
     if (!cap->spare_workers) {
@@ -560,8 +573,8 @@ releaseCapability_ (Capability* cap,
         // is interrupted, we only create a worker task if there
         // are threads that need to be completed.  If the system is
         // shutting down, we never create a new worker.
-        
         printf("h run queue size: %d\n", cap->n_hrun_queue);
+        printf("Emptyness: %d\n", cap->n_hrun_queue);
         if (sched_state < SCHED_SHUTTING_DOWN || !emptyRunQueue(cap)) {
             debugTrace(DEBUG_sched,
                        "starting new worker on capability %d", cap->no);
@@ -579,6 +592,7 @@ releaseCapability_ (Capability* cap,
         if (cap->spare_workers) {
             giveCapabilityToTask(cap, cap->spare_workers);
             // The worker Task pops itself from the queue;
+            printf("Giving cap to task at end of stuff, %p\n", cap->spare_workers);
             return;
         }
     }
@@ -594,6 +608,7 @@ void
 releaseCapability (Capability* cap USED_IF_THREADS)
 {
     ACQUIRE_LOCK(&cap->lock);
+    printf("acquired 3\n");
     releaseCapability_(cap, false);
     RELEASE_LOCK(&cap->lock);
 }
@@ -602,6 +617,7 @@ void
 releaseAndWakeupCapability (Capability* cap USED_IF_THREADS)
 {
     ACQUIRE_LOCK(&cap->lock);
+    printf("acquired 4\n");
     releaseCapability_(cap, true);
     RELEASE_LOCK(&cap->lock);
 }
@@ -662,6 +678,7 @@ static Capability * waitForWorkerCapability (Task *task)
         debugTrace(DEBUG_sched, "woken up on capability %d", cap->no);
 
         ACQUIRE_LOCK(&cap->lock);
+        printf("acquired 5\n");
         if (cap->running_task != NULL) {
             debugTrace(DEBUG_sched,
                        "capability %d is owned by another task", cap->no);
@@ -726,6 +743,7 @@ static Capability * waitForReturnCapability (Task *task)
 
         // now check whether we should wake up...
         ACQUIRE_LOCK(&cap->lock);
+        printf("acquired 6\n");
         if (cap->running_task == NULL) {
             if (cap->returning_tasks_hd != task) {
                 giveCapabilityToTask(cap,cap->returning_tasks_hd);
@@ -804,6 +822,7 @@ void waitForCapability (Capability **pCap, Task *task)
     debugTrace(DEBUG_sched, "returning; I want capability %d", cap->no);
 
     ACQUIRE_LOCK(&cap->lock);
+    printf("acquired 7\n");
     if (!cap->running_task) {
         // It's free; just grab it
         cap->running_task = task;
@@ -881,12 +900,14 @@ yieldCapability (Capability** pCap, Task *task, bool gcAllowed)
     task->wakeup = false;
 
     ACQUIRE_LOCK(&cap->lock);
+    printf("acquired 8\n");
 
     // If this is a worker thread, put it on the spare_workers queue
     if (isWorker(task)) {
         enqueueWorker(cap);
     }
 
+    printf("In yield\n");
     releaseCapability_(cap, false);
 
     if (isWorker(task) || isBoundTask(task)) {
@@ -960,6 +981,7 @@ void
 prodCapability (Capability *cap, Task *task)
 {
     ACQUIRE_LOCK(&cap->lock);
+    printf("acquired 9\n");
     if (!cap->running_task) {
         cap->running_task = task;
         releaseCapability_(cap,true);
@@ -984,6 +1006,7 @@ tryGrabCapability (Capability *cap, Task *task)
     int r;
     if (cap->running_task != NULL) return false;
     r = TRY_ACQUIRE_LOCK(&cap->lock);
+    printf("acquired 10\n");
     if (r != 0) return false;
     if (cap->running_task != NULL) {
         RELEASE_LOCK(&cap->lock);
@@ -1031,10 +1054,11 @@ shutdownCapability (Capability *cap USED_IF_THREADS,
 
     for (i = 0; /* i < 50 */; i++) {
         ASSERT(sched_state == SCHED_SHUTTING_DOWN);
-
+        printf("Shutting cap down\n");
         debugTrace(DEBUG_sched,
                    "shutting down capability %d, attempt %d", cap->no, i);
         ACQUIRE_LOCK(&cap->lock);
+        printf("acquired 11\n");
         if (cap->running_task) {
             RELEASE_LOCK(&cap->lock);
             debugTrace(DEBUG_sched, "not owner, yielding");
@@ -1070,6 +1094,7 @@ shutdownCapability (Capability *cap USED_IF_THREADS,
         if (!emptyRunQueue(cap) || cap->spare_workers) {
             debugTrace(DEBUG_sched,
                        "runnable threads or workers still alive, yielding");
+            //barf("fuck you");
             releaseCapability_(cap,false); // this will wake up a worker
             RELEASE_LOCK(&cap->lock);
             yieldThread();
@@ -1112,6 +1137,7 @@ shutdownCapability (Capability *cap USED_IF_THREADS,
     */
     cap->hrun_queue_current = END_TSO_QUEUE;
     cap->hrun_queue_top = END_TSO_QUEUE;
+    cap->hlast_run = END_TSO_QUEUE;
     cap->n_hrun_queue = 0;
 
     // ToDo: we can't drop this mutex, because there might still be
