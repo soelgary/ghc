@@ -142,6 +142,7 @@ appendToRunQueue (Capability *cap, StgTSO *tso)
     }
     cap->run_queue_tl = tso;
     cap->n_run_queue++;
+    ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
 }
 
 /* Push a thread on the beginning of the run queue.
@@ -168,6 +169,7 @@ pushOnRunQueue (Capability *cap, StgTSO *tso)
         cap->run_queue_tl = tso;
     }
     cap->n_run_queue++;
+    ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
 }
 
 
@@ -179,15 +181,10 @@ nextHThread (Capability *cap)
 {
   StgTSO *next = END_TSO_QUEUE;
   StgTSO *current = cap->hrun_queue_current;
-  int i = current->id;
-  printf("Current tso: %d\n", current->id);
 
   // An Hthread has not been scheduled yet
   if (cap->hrun_queue_current == END_TSO_QUEUE) {
-    //printf("HQUEUE: No one has been scheduled\n");
-    if (cap->hrun_queue_top == END_TSO_QUEUE) {
-      barf("Top is the end of the run queue");
-    }
+    ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
     return cap->hrun_queue_top;
   }
 
@@ -203,27 +200,23 @@ nextHThread (Capability *cap)
   */
 
   if (current->children != END_TSO_QUEUE) {
-    printf("HQUEUE: Found a child (%d)\n", i);
     next = current->children;
   } else if (current->hlink != END_TSO_QUEUE) {
-    printf("HQUEUE: Found a sibling (%d)\n", i);
     next = current->hlink;
   } else {
     while (1) {
       if (current->parent == END_TSO_QUEUE) {
-        printf("HQUEUE: Found the top (%d)\n", i);
         next = current;
         break;
       } else if (current->hlink != END_TSO_QUEUE) {
-        printf("HQUEUE: Found a sibling 2 (%d)\n", i);
         next = current->hlink;
         break; 
       } else {
-        printf("HQUEUE: Following a parent (%d)\n", i);
         current = current->parent;
       }
     }
   }
+  ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
   return next;
 }
 
@@ -236,21 +229,19 @@ popRunQueueH (Capability *cap)
   if (cap->hlast_run != END_TSO_QUEUE) {
     cap->hrun_queue_current = cap->hlast_run;
     cap->hlast_run = END_TSO_QUEUE;
+    ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
     return;
   }
   StgTSO *next = nextHThread(cap);
+
   cap->hrun_queue_current = next;
-  printf("Queue size: %d\n", cap->n_hrun_queue);
-  printf("Popped: %d\n", next->id);
   while (next->isDone || next->why_blocked != NotBlocked) {
     next = nextHThread(cap);
     cap->hrun_queue_current = next;
-    printf("Next Queue size: %d\n", cap->n_hrun_queue);
-    printf("Next Popped: %d\n", next->id);
-    printf("Is empty?? %d\n", countChildren(cap->hrun_queue_top));
   }
   debugTrace(DEBUG_sched, "HSched: Queueing up TSO %d", next->id);
   ASSERT(next != END_TSO_QUEUE);
+  ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
 }
 
 
@@ -260,6 +251,7 @@ INLINE_HEADER StgTSO *
 popRunQueue (Capability *cap)
 {
     popRunQueueH(cap);
+    ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
     return cap->hrun_queue_current;
     /*StgTSO *t = cap->run_queue_hd;
     ASSERT(t != END_TSO_QUEUE);
@@ -282,19 +274,19 @@ peekRunQueueH (Capability *cap)
   if (countChildren(cap->hrun_queue_top) == 0) {
     return END_TSO_QUEUE;
   }
+  if (cap->hlast_run != END_TSO_QUEUE) {
+    ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
+    return cap->hlast_run;
+  }
   StgTSO *current = cap->hrun_queue_current;
   StgTSO *next = nextHThread(cap);
   cap->hrun_queue_current = next;
-  //printf("Peek Queue size: %d\n", cap->n_hrun_queue);
-  //printf("Peek Popped: %d\n", next->id);
   while (next->isDone) {
     next = nextHThread(cap);
     cap->hrun_queue_current = next;
-    //printf("Peek Queue size: %d\n", cap->n_hrun_queue);
-    //printf("Peek Popped: %d\n", next->id);
   }
   cap->hrun_queue_current = current;
-  //printf("Done peeking\n");
+  ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
   return next;
 }
 
@@ -305,6 +297,7 @@ peekRunQueue (Capability *cap)
   //if (cap->run_queue_hd != END_TSO_QUEUE) {
   //return cap->run_queue_hd;
   //}
+  ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
   return peekRunQueueH(cap);
 }
 

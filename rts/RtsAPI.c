@@ -684,7 +684,6 @@ rts_unlock (Capability *cap)
     // random point in the future, which causes problems for
     // freeTaskManager().
     ACQUIRE_LOCK(&cap->lock);
-    printf("acquired 1\n");
     releaseCapability_(cap,false);
 
     // Finally, we can release the Task to the free list.
@@ -753,7 +752,6 @@ void hs_try_putmvar (/* in */ int capability,
 #else
 
     ACQUIRE_LOCK(&cap->lock);
-    printf("acquired 2\n");
     // If the capability is free, we can perform the tryPutMVar immediately
     if (cap->running_task == NULL) {
         cap->running_task = task;

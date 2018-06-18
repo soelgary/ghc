@@ -305,7 +305,6 @@ schedule (Capability *initialCapability, Task *task)
     scheduleYield(&cap,task);
 
     if (emptyRunQueue(cap)) {
-      printf("We be empty\n");
       continue; // look for work again
     } 
 #endif
@@ -322,14 +321,13 @@ schedule (Capability *initialCapability, Task *task)
     while(1) {
       t = popRunQueue(cap);
       if (t->why_blocked != NotBlocked) {
-        printf("thread %d blocked for %d\n", t->id, t->why_blocked);
-        //barf("Bad stuff");;
+      } else if (t == END_TSO_QUEUE) {
+        barf("Scheduling end tso queue");
       } else {
         break;
       }
     }
 
-    printf("Why blocked you ask? --- %d (%d)\n", t->why_blocked, t->id);
 
     // Sanity check the thread we're about to run.  This can be
     // expensive if there is lots of thread switching going on...
@@ -349,10 +347,8 @@ schedule (Capability *initialCapability, Task *task)
                            "thread %lu bound to another OS thread",
                            (unsigned long)t->id);
                 // no, bound to a different Haskell thread: pass to that thread
-                printf("Pushing %d\n", cap->hlast_run->id);
                 cap->hlast_run = t;
                 //pushOnRunQueue(cap,cap->hlast_run);
-                printf("Thread %d bound to OS thread %p. This OS thread is %p\n", t->id, bound->task, task);
                 continue;
             }
         } else {
@@ -363,11 +359,8 @@ schedule (Capability *initialCapability, Task *task)
                            (unsigned long)t->id);
                 // no, the current native thread is bound to a different
                 // Haskell thread, so pass it to any worker thread
-                pushOnRunQueue(cap,t);
-                printf("This OS thread (%d/%d) cannot run thread %d\n", cap->no, n_capabilities, t->id);
-                printf("Thread %d is the incall\n", task->incall->tso->id);
-                printf("Suspended: %p\n", task->incall->suspended_tso);
-                printf("Run queue size: %d\n", cap->n_hrun_queue);
+                //pushOnRunQueue(cap,t);
+                cap->hlast_run = t;
                 continue;
             }
         }
@@ -478,13 +471,11 @@ run_thread:
     case ThreadKilled:
     case ThreadComplete:
         /* Thread already finished, return to scheduler. */
-        printf("Thread killed/complete %d\n", t->id);
         ret = ThreadFinished;
         break;
 
     case ThreadRunGHC:
     {
-        printf("Running haskell code (%d)\n", t->id);
         StgRegTable *r;
         r = StgRun((StgFunPtr) stg_returnToStackTop, &cap->r);
         cap = regTableToCapability(r);
@@ -493,7 +484,6 @@ run_thread:
     }
     case ThreadDone:
     {
-      printf("Thread done %d\n", t->id);
       ret = ThreadYielding;
       break;
     }
@@ -566,7 +556,6 @@ run_thread:
         break;
 
     case ThreadYielding:
-        printf("Yielding\n");
         if (scheduleHandleYield(cap, t, prev_what_next)) {
             // shortcut for switching between compiler/interpreter:
             goto run_thread;
@@ -574,7 +563,6 @@ run_thread:
         break;
 
     case ThreadBlocked:
-        printf("Blocked (%d)\n", t->id);
         scheduleHandleThreadBlocked(t);
         break;
 
@@ -599,7 +587,7 @@ run_thread:
  * Run queue operations
  * -------------------------------------------------------------------------- */
 
-static void
+/*static void
 removeFromRunQueue (Capability *cap, StgTSO *tso)
 {
     if (tso->block_info.prev == END_TSO_QUEUE) {
@@ -619,12 +607,12 @@ removeFromRunQueue (Capability *cap, StgTSO *tso)
 
     IF_DEBUG(sanity, checkRunQueue(cap));
 }
-
+*/
 void
-promoteInRunQueue (Capability *cap, StgTSO *tso)
+promoteInRunQueue (Capability __attribute__((__unused__)) *cap, StgTSO __attribute__((__unused__)) *tso)
 {
-    removeFromRunQueue(cap, tso);
-    pushOnRunQueue(cap, tso);
+    //removeFromRunQueue(cap, tso);
+    //pushOnRunQueue(cap, tso);
 }
 
 /* ----------------------------------------------------------------------------
@@ -680,41 +668,30 @@ shouldYieldCapability (Capability *cap, Task *task, bool didGcLast, bool yielded
     // Capability keeps forcing a GC and the other Capabilities make no
     // progress at all.
 
-    //printf("Pending sync: %d\n", pending_sync);
-    //printf("Gc last: %d\n", didGcLast);
-    //printf("Ret tasks: %d\n", cap->n_returning_tasks);
-    //printf("Should yield tso %d?\n", peekRunQueue(cap)->id);
-    //printf("why blocked?? %d?\n", peekRunQueue(cap)->why_blocked);
     if (pending_sync && !didGcLast) {
-      //printf("Passed pending and gc!\n");
       return true;
     }
     if (cap->n_returning_tasks != 0) {
-      //printf("Non zero returning tasks!\n");
       return true;
     }
     if (!emptyRunQueue(cap)) {
-      //printf("Non empty queue\n");
       if (task->incall->tso == NULL) {
-        //printf("NULL tso incall\n");
         if (peekRunQueue(cap)->bound != NULL) {
-          printf("Peeked at a non null bound!: %d\n", cap->n_suspended_ccalls);
           return true;
         } else if (cap->hlast_run == cap->hrun_queue_current &&
                    (cap->hlast_run->id == 4 && !yielded)) {
-          printf("Last run (%d) is the current (%d)\n", cap->hlast_run->id, cap->hrun_queue_current->id);
           return true;
         } else {
-          printf("Peeked at a non null bound but false!\n");
           return false;
         }
       } else {
         if (cap->hlast_run->bound == task->incall) {
-          printf("fuck ya motherfuckers\n");
           return false;
         }
         if (peekRunQueue(cap)->bound != task->incall) {
-          printf("bound and incall not the same!: %d\n", cap->n_suspended_ccalls);
+          return true;
+        }
+        if (cap->hlast_run->bound != task->incall && cap->hlast_run != END_TSO_QUEUE) {
           return true;
         }
       }
@@ -744,6 +721,8 @@ scheduleYield (Capability **pcap, Task *task)
     Capability *cap = *pcap;
     bool didGcLast = false;
 
+    ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
+
     // if we have work, and we don't need to give up the Capability, continue.
     //
     if (!shouldYieldCapability(cap,task,false,false) &&
@@ -756,12 +735,10 @@ scheduleYield (Capability **pcap, Task *task)
 
     // otherwise yield (sleep), and keep yielding if necessary.
     do {
-        printf("Yielding cap %d (%lu)\n", n_capabilities, i);
         didGcLast = yieldCapability(&cap,task, !didGcLast);
         i++;
     }
     while (shouldYieldCapability(cap,task,didGcLast,true));
-    printf("Done yielding\n");
 
     // note there may still be no threads on the run queue at this
     // point, the caller has to check.
@@ -1090,7 +1067,6 @@ scheduleProcessInbox (Capability **pcap USED_IF_THREADS)
         // use cap->lock (cap->lock is released as the last thing
         // before going idle; see Capability.c:releaseCapability()).
         r = TRY_ACQUIRE_LOCK(&cap->lock);
-        printf("acquired 12\n");
         if (r != 0) return;
 
         m = cap->inbox;
@@ -2492,7 +2468,6 @@ suspendThread (StgRegTable *reg, bool interruptible)
   cap->r.rCurrentTSO = NULL;
 
   ACQUIRE_LOCK(&cap->lock);
-  printf("acquired 13\n");
 
   suspendTask(cap,task);
   cap->in_haskell = false;
@@ -2591,8 +2566,6 @@ scheduleThread(Capability *cap, StgTSO *tso)
 void
 scheduleThreadOn(__attribute__((__unused__))Capability *cap, __attribute__((__unused__))StgWord cpu USED_IF_THREADS, __attribute__((__unused__))StgTSO *tso)
 {
-    printf("Scheduling %d on cap %d\n", tso->id, cap->no);
-    if (tso->id == 4) barf("FUCKKKK YOU");
     tso->flags |= TSO_LOCKED; // we requested explicit affinity; don't
                               // move this thread from now on.
 #if defined(THREADED_RTS)
@@ -2610,7 +2583,6 @@ scheduleThreadOn(__attribute__((__unused__))Capability *cap, __attribute__((__un
 void
 scheduleWaitThread (StgTSO* tso, /*[out]*/HaskellObj* ret, Capability **pcap)
 {
-    printf("Waiting %d\n", tso->id);
     Task *task;
     DEBUG_ONLY( StgThreadID id );
     Capability *cap;
@@ -2631,6 +2603,10 @@ scheduleWaitThread (StgTSO* tso, /*[out]*/HaskellObj* ret, Capability **pcap)
 
     appendToRunQueue(cap,tso);
 
+    if (cap->hrun_queue_current == END_TSO_QUEUE) {
+      cap->hrun_queue_current = tso;
+    }
+
     DEBUG_ONLY( id = tso->id );
     debugTrace(DEBUG_sched, "new bound thread (%lu)", (unsigned long)id);
 
@@ -2650,7 +2626,6 @@ scheduleWaitThread (StgTSO* tso, /*[out]*/HaskellObj* ret, Capability **pcap)
 #if defined(THREADED_RTS)
 void scheduleWorker (Capability *cap, Task *task)
 {
-    printf("Scheduling a worker!\n");
     // schedule() runs without a lock.
     cap = schedule(cap,task);
 
@@ -2667,7 +2642,6 @@ void scheduleWorker (Capability *cap, Task *task)
     // Capability has been shut down.
     //
     ACQUIRE_LOCK(&cap->lock);
-    printf("acquired 14\n");
     releaseCapability_(cap,false);
     workerTaskStop(task);
     RELEASE_LOCK(&cap->lock);
@@ -2687,7 +2661,6 @@ startWorkerTasks (uint32_t from USED_IF_THREADS, uint32_t to USED_IF_THREADS)
     for (i = from; i < to; i++) {
         cap = capabilities[i];
         ACQUIRE_LOCK(&cap->lock);
-        printf("acquired 15\n");
         startWorkerTask(cap);
         RELEASE_LOCK(&cap->lock);
     }
@@ -3160,7 +3133,6 @@ countSiblings(StgTSO *tso)
   uint32_t count = 0;
   while (tso != END_TSO_QUEUE) {
     if (tso->what_next == ThreadRunGHC && tso->why_blocked == NotBlocked) {
-      printf("Sibling count: %d\n", tso->id);
       count++;
     }
     count += countChildren(tso->children);
@@ -3175,7 +3147,6 @@ countChildren(StgTSO *tso)
   uint32_t count = 0;
   while (tso != END_TSO_QUEUE) {
     if (tso->what_next == ThreadRunGHC && tso->why_blocked == NotBlocked) {
-      printf("Child count: %d\n", tso->id);
       count++;
     }
     count += countSiblings(tso->hlink);
