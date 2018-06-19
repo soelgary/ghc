@@ -66,6 +66,8 @@ uint32_t n_numa_nodes;
 // Map logical NUMA node to OS node numbers
 uint32_t numa_map[MAX_NUMA_NODES];
 
+void capabilityHandleTick(Capability *cap);
+
 /* Let foreign code get the current Capability -- assuming there is one!
  * This is useful for unsafe foreign calls because they are called with
  * the current Capability held, but they are not passed it. For example,
@@ -321,6 +323,9 @@ initCapability (Capability *cap, uint32_t i)
     cap->hrun_queue_top = END_TSO_QUEUE;
     cap->hlast_run = END_TSO_QUEUE;
     cap->n_hrun_queue = 0;
+    cap->cached_tso = END_TSO_QUEUE;
+
+    cap->unprocessed_ticks = 0;
 
     traceCapCreate(cap);
     traceCapsetAssignCap(CAPSET_OSPROCESS_DEFAULT, i);
@@ -1187,6 +1192,7 @@ markCapability (evac_fn evac, void *user, Capability *cap,
     evac(user, (StgClosure **)(void *)&cap->run_queue_tl);
     evac(user, (StgClosure **)(void *)&cap->hrun_queue_current);
     evac(user, (StgClosure **)(void *)&cap->hrun_queue_top);
+    evac(user, (StgClosure **)(void *)&cap->cached_tso);
 #if defined(THREADED_RTS)
     evac(user, (StgClosure **)(void *)&cap->inbox);
 #endif
@@ -1257,3 +1263,21 @@ setIOManagerControlFd(uint32_t cap_no USED_IF_THREADS, int fd USED_IF_THREADS) {
 #endif
 }
 #endif
+
+void
+capabilityHandleTick(Capability *cap)
+{
+  cap->unprocessed_ticks++;
+}
+
+/*
+  Decrement the tick for each thread running
+*/
+void
+handleTick()
+{
+  uint32_t i;
+  for (i=0; i < n_capabilities; i++) {
+    capabilityHandleTick(capabilities[i]);
+  }
+}

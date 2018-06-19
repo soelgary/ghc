@@ -173,11 +173,19 @@ typedef struct StgTSO_ {
      */
     StgWord32  tot_stack_size;
 
+    // Hiararchical run queue
     StgTSO *children;
     StgTSO *hlink;
     StgTSO *parent;
     bool isHThread;
     bool isDone;
+
+    // Time slices
+    StgInt64 ticks; /* The number of ticks this TSO will run for when scheduled */
+    StgInt64 ticks_remaining; /* Ticks until the TSO will context switch */
+    StgInt64 timeout; /* Ticks until this thread times out */
+    StgBool has_timeout;
+    StgInt64 suspendTicks;
 
 #if defined(TICKY_TICKY)
     /* TICKY-specific stuff would go here. */

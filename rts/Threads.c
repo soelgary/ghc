@@ -135,6 +135,12 @@ createThread(Capability *cap, W_ size)
     tso->isHThread = false;
     tso->isDone = false;
 
+    tso->ticks = 2;
+    tso->ticks_remaining = 2;
+    tso->timeout = -1;
+    tso->has_timeout = false;
+    tso->suspendTicks = -1;
+
     // ToDo: report the stack size in the event?
     traceEventCreateThread(cap, tso);
 

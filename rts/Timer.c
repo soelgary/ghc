@@ -26,7 +26,7 @@
 #include "RtsSignals.h"
 
 /* ticks left before next pre-emptive context switch */
-static int ticks_to_ctxt_switch = 0;
+//static int ticks_to_ctxt_switch = 0;
 
 /* idle ticks left before we perform a GC */
 static int ticks_to_gc = 0;
@@ -42,13 +42,14 @@ void
 handle_tick(int unused STG_UNUSED)
 {
   handleProfTick();
-  if (RtsFlags.ConcFlags.ctxtSwitchTicks > 0) {
-      ticks_to_ctxt_switch--;
-      if (ticks_to_ctxt_switch <= 0) {
-          ticks_to_ctxt_switch = RtsFlags.ConcFlags.ctxtSwitchTicks;
-          contextSwitchAllCapabilities(); /* schedule a context switch */
-      }
-  }
+  handleTick();
+  //if (RtsFlags.ConcFlags.ctxtSwitchTicks > 0) {
+  //    ticks_to_ctxt_switch--;
+  //    if (ticks_to_ctxt_switch <= 0) {
+  //        ticks_to_ctxt_switch = RtsFlags.ConcFlags.ctxtSwitchTicks;
+  //        contextSwitchAllCapabilities(); /* schedule a context switch */
+  //    }
+  //}
 
   /*
    * If we've been inactive for idleGCDelayTime (set by +RTS

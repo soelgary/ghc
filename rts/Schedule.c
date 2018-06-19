@@ -145,7 +145,7 @@ static void schedulePostRunThread(Capability *cap, StgTSO *t);
 static bool scheduleHandleHeapOverflow( Capability *cap, StgTSO *t );
 static bool scheduleHandleYield( Capability *cap, StgTSO *t,
                                  uint32_t prev_what_next );
-static void scheduleHandleThreadBlocked( StgTSO *t );
+static void scheduleHandleThreadBlocked( Capability *cap, StgTSO *t );
 static bool scheduleHandleThreadFinished( Capability *cap, Task *task,
                                           StgTSO *t );
 static bool scheduleNeedHeapProfile(bool ready_to_gc);
@@ -153,6 +153,8 @@ static void scheduleDoGC(Capability **pcap, Task *task, bool force_major);
 
 static void deleteThread (Capability *cap, StgTSO *tso);
 static void deleteAllThreads (Capability *cap);
+
+void busyWaitUntilTimeSliceEnd(Capability *cap, StgTSO *t);
 
 #if defined(FORKPROCESS_PRIMOP_SUPPORTED)
 static void deleteThread_(Capability *cap, StgTSO *tso);
@@ -315,18 +317,22 @@ schedule (Capability *initialCapability, Task *task)
     }
 #endif
 
+pop_thread:
     //
     // Get a thread to run
     //
     while(1) {
       t = popRunQueue(cap);
-      if (t->why_blocked != NotBlocked) {
+      if (t->why_blocked != NotBlocked && t->why_blocked != BlockedOnCCall) {
+        busyWaitUntilTimeSliceEnd(cap, t);
       } else if (t == END_TSO_QUEUE) {
         barf("Scheduling end tso queue");
       } else {
         break;
       }
     }
+
+    
 
 
     // Sanity check the thread we're about to run.  This can be
@@ -349,6 +355,7 @@ schedule (Capability *initialCapability, Task *task)
                 // no, bound to a different Haskell thread: pass to that thread
                 cap->hlast_run = t;
                 //pushOnRunQueue(cap,cap->hlast_run);
+                //busyWaitUntilTimeSliceEnd(cap);
                 continue;
             }
         } else {
@@ -361,6 +368,7 @@ schedule (Capability *initialCapability, Task *task)
                 // Haskell thread, so pass it to any worker thread
                 //pushOnRunQueue(cap,t);
                 cap->hlast_run = t;
+                //busyWaitUntilTimeSliceEnd
                 continue;
             }
         }
@@ -409,6 +417,14 @@ schedule (Capability *initialCapability, Task *task)
     }
 
 run_thread:
+
+  t->ticks_remaining -= cap->unprocessed_ticks;
+  cap->unprocessed_ticks = 0;
+  if (t->ticks_remaining <= 0) {
+    t->ticks_remaining = t->ticks;
+    goto pop_thread;
+  }
+  debugTrace(DEBUG_sched, "Running thread %d with %d remaining ticks", t->id, t->ticks_remaining);
 
     // CurrentTSO is the thread to run. It might be different if we
     // loop back to run_thread, so make sure to set CurrentTSO after
@@ -563,7 +579,7 @@ run_thread:
         break;
 
     case ThreadBlocked:
-        scheduleHandleThreadBlocked(t);
+        scheduleHandleThreadBlocked(cap, t);
         break;
 
     case ThreadFinished:
@@ -1176,8 +1192,14 @@ scheduleHandleHeapOverflow( Capability *cap, StgTSO *t )
         cap->context_switch = 0;
         appendToRunQueue(cap,t);
     } else {
-        pushOnRunQueue(cap,t);
+        //pushOnRunQueue(cap,t);
     }
+
+    t->ticks_remaining -= cap->unprocessed_ticks;
+    if (t->ticks_remaining > 0) {
+      pushOnRunQueue(cap, t);
+    }
+    cap->unprocessed_ticks = 0;
 
     // did the task ask for a large block?
     if (cap->r.rHpAlloc > BLOCK_SIZE) {
@@ -1275,11 +1297,14 @@ scheduleHandleYield( Capability *cap, StgTSO *t, uint32_t prev_what_next )
     // the CPU because the tick always arrives during GC).  This way
     // penalises threads that do a lot of allocation, but that seems
     // better than the alternative.
-    if (cap->context_switch != 0) {
+    /*if (cap->context_switch != 0) {
         cap->context_switch = 0;
         appendToRunQueue(cap,t);
     } else {
         pushOnRunQueue(cap,t);
+    }*/
+    if (t->ticks_remaining > 0) {
+      pushOnRunQueue(cap,t);
     }
 
     IF_DEBUG(sanity,
@@ -1294,12 +1319,15 @@ scheduleHandleYield( Capability *cap, StgTSO *t, uint32_t prev_what_next )
  * -------------------------------------------------------------------------- */
 
 static void
-scheduleHandleThreadBlocked( StgTSO *t
+scheduleHandleThreadBlocked( Capability *cap, StgTSO *t
 #if !defined(DEBUG)
     STG_UNUSED
 #endif
     )
 {
+  if (t->ticks_remaining > 0) {
+    pushOnRunQueue(cap, t);
+  }
 
       // We don't need to do anything.  The thread is blocked, and it
       // has tidied up its stack and placed itself on whatever queue
@@ -3153,4 +3181,16 @@ countChildren(StgTSO *tso)
     tso = tso->children;
   }
   return count;
+}
+
+void
+busyWaitUntilTimeSliceEnd(Capability *cap, StgTSO *t)
+{
+  debugTrace(DEBUG_sched, "Busy wait for TSO %d", t->id);
+  while (t->ticks_remaining > 0) {
+    t->ticks_remaining -= cap->unprocessed_ticks;
+    //debugTrace(DEBUG_sched, "TSO %d has %d remaining ticks", t->id, t->ticks_remaining);
+  }
+  debugTrace(DEBUG_sched, "TSO %d done waiting (%d)", t->id, t->ticks_remaining);
+  t->ticks_remaining = t->ticks;
 }

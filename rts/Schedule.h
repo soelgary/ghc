@@ -157,6 +157,7 @@ pushOnRunQueue (Capability *cap, StgTSO *tso)
     if (tso->isHThread) {
       ASSERT(tso != END_TSO_QUEUE);
       cap->hrun_queue_current = tso;
+      cap->cached_tso = tso;
       return;
     }
     setTSOLink(cap, tso, cap->run_queue_hd);
@@ -229,6 +230,12 @@ popRunQueueH (Capability *cap)
   if (cap->hlast_run != END_TSO_QUEUE) {
     cap->hrun_queue_current = cap->hlast_run;
     cap->hlast_run = END_TSO_QUEUE;
+    ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
+    return;
+  }
+  if (cap->cached_tso != END_TSO_QUEUE) {
+    cap->hrun_queue_current = cap->cached_tso;
+    cap->cached_tso = END_TSO_QUEUE;
     ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
     return;
   }

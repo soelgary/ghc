@@ -1,0 +1,703 @@
+NoFib Results
+
+--------------------------------------------------------------------------------
+        Program           Size    Allocs   Runtime   Elapsed  TotalMem
+--------------------------------------------------------------------------------
+   blackscholes        +348.5%     +0.0%     +2.7%     +2.5%      0.0%
+          coins        +384.6%     +0.0%     +7.9%     +7.2%     +0.8%
+           gray        +294.6%     +0.0%    +13.1%    +12.8%      0.0%
+         mandel        +415.6%     +0.0%    +12.3%    +11.8%     -1.6%
+        matmult        +369.8%     +0.1%     +2.3%     +2.3%     +0.7%
+        minimax        +335.4%     +2.1%    +12.5%    +11.8%      0.0%
+          nbody        +485.6%     +2.2%     0.178     0.178      0.0%
+         parfib        +390.8%     +0.0%    +39.1%    +39.0%      0.0%
+        partree        +381.1%     +6.1%    +14.5%    +13.1%     -4.8%
+           prsa        +370.2%     -0.0%     +5.8%     +5.5%      0.0%
+         queens        +397.6%     +0.0%     +4.2%     +4.0%      0.0%
+            ray        +389.0%     +0.1%    +21.8%    +21.0%      0.0%
+       sumeuler        +385.1%     +0.0%     +0.2%     +0.1%      0.0%
+      transclos        +409.2%     -0.0%    +16.7%    +16.0%      0.0%
+--------------------------------------------------------------------------------
+            Min        +294.6%     -0.0%     +0.2%     +0.1%     -4.8%
+            Max        +485.6%     +6.1%    +39.1%    +39.0%     +0.8%
+ Geometric Mean        +380.9%     +0.7%    +11.4%    +10.9%     -0.4%
+
+Binary Sizes
+
+-------------------------------------------------------------------------------
+        Program                  meh              meh
+-------------------------------------------------------------------------------
+   blackscholes              1170594          +348.5%
+          coins              1012210          +384.6%
+           gray              1821823          +294.6%
+         mandel              1148834          +415.6%
+        matmult              1109890          +369.8%
+        minimax              1411625          +335.4%
+          nbody              1047858          +485.6%
+         parfib               996570          +390.8%
+        partree              1020002          +381.1%
+           prsa              1106954          +370.2%
+         queens              1044970          +397.6%
+            ray              1068266          +389.0%
+       sumeuler              1076514          +385.1%
+      transclos              1182066          +409.2%
+        -1 s.d.                -----          +341.2%
+        +1 s.d.                -----          +424.1%
+        Average                -----          +380.9%
+
+Allocations
+
+-------------------------------------------------------------------------------
+        Program                  meh              meh
+-------------------------------------------------------------------------------
+   blackscholes           1980591544            +0.0%
+          coins           5252241950            +0.0%
+           gray           2112439348            +0.0%
+         mandel           8536253352            +0.0%
+        matmult             72515688            +0.1%
+        minimax          14484871400            +2.1%
+          nbody              1520280            +2.2%
+         parfib            365102176            +0.0%
+        partree           3329145215            +6.1%
+           prsa           2485609696            -0.0%
+         queens            831979552            +0.0%
+            ray          13574330348            +0.1%
+       sumeuler            513743980            +0.0%
+      transclos           8980338336            -0.0%
+        -1 s.d.                -----            -0.9%
+        +1 s.d.                -----            +2.4%
+        Average                -----            +0.7%
+
+Run Time
+
+-------------------------------------------------------------------------------
+        Program                  meh              meh
+-------------------------------------------------------------------------------
+   blackscholes                2.270            +2.7%
+          coins                1.333            +7.9%
+           gray                0.708           +13.1%
+         mandel                2.850           +12.3%
+        matmult                4.427            +2.3%
+        minimax                3.765           +12.5%
+          nbody                0.168            0.178
+         parfib                2.112           +39.1%
+        partree                0.908           +14.5%
+           prsa                1.808            +5.8%
+         queens                1.158            +4.2%
+            ray                1.917           +21.8%
+       sumeuler                2.884            +0.2%
+      transclos                1.953           +16.7%
+        -1 s.d.                -----            +2.3%
+        +1 s.d.                -----           +21.2%
+        Average                -----           +11.4%
+
+Elapsed Time
+
+-------------------------------------------------------------------------------
+        Program                  meh              meh
+-------------------------------------------------------------------------------
+   blackscholes                2.269            +2.5%
+          coins                1.332            +7.2%
+           gray                0.700           +12.8%
+         mandel                2.848           +11.8%
+        matmult                4.421            +2.3%
+        minimax                3.763           +11.8%
+          nbody                0.168            0.178
+         parfib                2.111           +39.0%
+        partree                0.907           +13.1%
+           prsa                1.803            +5.5%
+         queens                1.157            +4.0%
+            ray                1.909           +21.0%
+       sumeuler                2.882            +0.1%
+      transclos                1.952           +16.0%
+        -1 s.d.                -----            +1.9%
+        +1 s.d.                -----           +20.7%
+        Average                -----           +10.9%
+
+Mutator Time
+
+-------------------------------------------------------------------------------
+        Program                  meh              meh
+-------------------------------------------------------------------------------
+   blackscholes                2.255            +2.7%
+          coins                0.473           +19.0%
+           gray                0.615           +13.8%
+         mandel                2.732           +12.6%
+        matmult                4.383            +2.3%
+        minimax                2.649           +15.6%
+          nbody                0.167            0.177
+         parfib                2.104           +39.2%
+        partree                0.486           +26.0%
+           prsa                1.748            +5.9%
+         queens                1.131            +4.3%
+            ray                1.685           +23.1%
+       sumeuler                2.880            +0.1%
+      transclos                1.910           +16.8%
+        -1 s.d.                -----            +3.5%
+        +1 s.d.                -----           +24.5%
+        Average                -----           +13.5%
+
+Mutator Elapsed Time
+
+-------------------------------------------------------------------------------
+        Program                  meh              meh
+-------------------------------------------------------------------------------
+   blackscholes                2.254            +2.5%
+          coins                0.472           +17.3%
+           gray                0.608           +13.4%
+         mandel                2.731           +12.1%
+        matmult                4.378            +2.3%
+        minimax                2.648           +14.6%
+          nbody                0.167            0.176
+         parfib                2.103           +39.1%
+        partree                0.486           +23.5%
+           prsa                1.744            +5.6%
+         queens                1.130            +4.1%
+            ray                1.678           +22.2%
+       sumeuler                2.879            +0.1%
+      transclos                1.910           +16.1%
+        -1 s.d.                -----            +3.1%
+        +1 s.d.                -----           +23.4%
+        Average                -----           +12.8%
+
+GC Time
+
+-------------------------------------------------------------------------------
+        Program                  meh              meh
+-------------------------------------------------------------------------------
+   blackscholes                0.014            0.015
+          coins                0.860            +1.7%
+           gray                0.092            0.100
+         mandel                0.118            0.125
+        matmult                0.044            0.044
+        minimax                1.116            +5.1%
+          nbody                0.001            0.001
+         parfib                0.008            0.008
+        partree                0.421            +1.1%
+           prsa                0.059            0.061
+         queens                0.027            0.027
+            ray                0.232           +12.3%
+       sumeuler                0.003            0.003
+      transclos                0.042            0.046
+        -1 s.d.                -----            +0.7%
+        +1 s.d.                -----            +9.4%
+        Average                -----            +5.0%
+
+GC Elapsed Time
+
+-------------------------------------------------------------------------------
+        Program                  meh              meh
+-------------------------------------------------------------------------------
+   blackscholes                0.014            0.015
+          coins                0.859            +1.7%
+           gray                0.092            0.099
+         mandel                0.117            0.124
+        matmult                0.043            0.044
+        minimax                1.116            +5.1%
+          nbody                0.001            0.001
+         parfib                0.008            0.008
+        partree                0.421            +1.2%
+           prsa                0.058            0.060
+         queens                0.027            0.027
+            ray                0.230           +12.7%
+       sumeuler                0.003            0.003
+      transclos                0.042            0.045
+        -1 s.d.                -----            +0.6%
+        +1 s.d.                -----            +9.7%
+        Average                -----            +5.1%
+
+GC(0) Count
+
+-------------------------------------------------------------------------------
+        Program                  meh              meh
+-------------------------------------------------------------------------------
+   blackscholes                 1824             0.0%
+          coins                 5003             0.0%
+           gray                 1917            -0.8%
+         mandel                 8200             0.0%
+        matmult                   64             0.0%
+        minimax                12888            +2.1%
+          nbody                    1             0.0%
+         parfib                  347             0.0%
+        partree                 2614            +7.3%
+           prsa                 2339            -0.2%
+         queens                  779            +0.1%
+            ray                12904            -1.0%
+       sumeuler                  488            +0.2%
+      transclos                 8568            -0.0%
+        -1 s.d.                -----            -1.4%
+        +1 s.d.                -----            +2.5%
+        Average                -----            +0.5%
+
+GC(0) Time
+
+-------------------------------------------------------------------------------
+        Program                  meh              meh
+-------------------------------------------------------------------------------
+   blackscholes                0.010            0.010
+          coins                0.368            +0.1%
+           gray                0.064            0.067
+         mandel                0.061            0.066
+        matmult                0.020            0.018
+        minimax                1.057            +4.4%
+          nbody                0.001            0.000
+         parfib                0.007            0.008
+        partree                0.303            +0.8%
+           prsa                0.049            0.050
+         queens                0.019            0.019
+            ray                0.215            +2.0%
+       sumeuler                0.003            0.003
+      transclos                0.041            0.044
+        -1 s.d.                -----            +0.2%
+        +1 s.d.                -----            +3.5%
+        Average                -----            +1.8%
+
+GC(0) Elapsed Time
+
+-------------------------------------------------------------------------------
+        Program                  meh              meh
+-------------------------------------------------------------------------------
+   blackscholes                0.010            0.010
+          coins                0.368            +0.2%
+           gray                0.063            0.066
+         mandel                0.060            0.065
+        matmult                0.019            0.018
+        minimax                1.056            +4.4%
+          nbody                0.001            0.000
+         parfib                0.007            0.008
+        partree                0.303            +0.7%
+           prsa                0.049            0.050
+         queens                0.019            0.019
+            ray                0.213            +2.4%
+       sumeuler                0.003            0.003
+      transclos                0.040            0.043
+        -1 s.d.                -----            +0.3%
+        +1 s.d.                -----            +3.6%
+        Average                -----            +1.9%
+
+GC(1) Count
+
+-------------------------------------------------------------------------------
+        Program                  meh              meh
+-------------------------------------------------------------------------------
+   blackscholes                    8             0.0%
+          coins                   11             0.0%
+           gray                  114           +14.0%
+         mandel                    8             0.0%
+        matmult                    6             0.0%
+        minimax                 1032            +2.8%
+          nbody                    1             0.0%
+         parfib                    2             0.0%
+        partree                  442            +0.7%
+           prsa                   64            +7.8%
+         queens                   23            -4.3%
+            ray                  276           +48.2%
+       sumeuler                    2             0.0%
+      transclos                   18            +5.6%
+        -1 s.d.                -----            -5.7%
+        +1 s.d.                -----           +16.3%
+        Average                -----            +4.7%
+
+GC(1) Time
+
+-------------------------------------------------------------------------------
+        Program                  meh              meh
+-------------------------------------------------------------------------------
+   blackscholes                0.004            0.005
+          coins                0.492            +3.0%
+           gray                0.029            0.033
+         mandel                0.057            0.059
+        matmult                0.024            0.025
+        minimax                0.060            0.070
+          nbody                0.000            0.000
+         parfib                0.000            0.000
+        partree                0.118            0.121
+           prsa                0.009            0.011
+         queens                0.008            0.008
+            ray                0.017            0.042
+       sumeuler                0.000            0.001
+      transclos                0.002            0.002
+        -1 s.d.                -----            +3.0%
+        +1 s.d.                -----            +3.0%
+        Average                -----            +3.0%
+
+GC(1) Elapsed Time
+
+-------------------------------------------------------------------------------
+        Program                  meh              meh
+-------------------------------------------------------------------------------
+   blackscholes                0.004            0.004
+          coins                0.491            +2.8%
+           gray                0.029            0.033
+         mandel                0.057            0.059
+        matmult                0.024            0.025
+        minimax                0.060            0.070
+          nbody                0.000            0.000
+         parfib                0.000            0.000
+        partree                0.118            0.121
+           prsa                0.009            0.011
+         queens                0.008            0.008
+            ray                0.017            0.042
+       sumeuler                0.000            0.000
+      transclos                0.002            0.002
+        -1 s.d.                -----            +2.8%
+        +1 s.d.                -----            +2.8%
+        Average                -----            +2.8%
+
+GC Work
+
+-------------------------------------------------------------------------------
+        Program                  meh              meh
+-------------------------------------------------------------------------------
+   blackscholes              2616981            +0.1%
+          coins           1461942038            +0.3%
+           gray            137277861            +9.6%
+         mandel            113092474            -2.2%
+        matmult             47948040            -0.1%
+        minimax           1078096365            -0.4%
+          nbody               693480            +0.4%
+         parfib               378172            +2.3%
+        partree            586417400            +1.0%
+           prsa             63872174            +4.3%
+         queens             36787484            -3.9%
+            ray            283624903           +42.0%
+       sumeuler              1179651            -0.2%
+      transclos             27047543            +0.4%
+        -1 s.d.                -----            -5.8%
+        +1 s.d.                -----           +13.4%
+        Average                -----            +3.3%
+
+GC work balance
+
+-------------------------------------------------------------------------------
+        Program                  meh              meh
+-------------------------------------------------------------------------------
+   blackscholes                1.000             0.0%
+          coins                1.000             0.0%
+           gray                1.000             0.0%
+         mandel                1.000             0.0%
+        matmult                1.000             0.0%
+        minimax                1.000             0.0%
+          nbody                1.000             0.0%
+         parfib                1.000             0.0%
+        partree                1.000             0.0%
+           prsa                1.000             0.0%
+         queens                1.000             0.0%
+            ray                1.000             0.0%
+       sumeuler                1.000             0.0%
+      transclos                1.000             0.0%
+        -1 s.d.                -----            +0.0%
+        +1 s.d.                -----            +0.0%
+        Average                -----            +0.0%
+
+Instructions
+
+-------------------------------------------------------------------------------
+        Program                  meh              meh
+-------------------------------------------------------------------------------
+   blackscholes          (no result)      (no result)
+          coins          (no result)      (no result)
+           gray          (no result)      (no result)
+         mandel          (no result)      (no result)
+        matmult          (no result)      (no result)
+        minimax          (no result)      (no result)
+          nbody          (no result)      (no result)
+         parfib          (no result)      (no result)
+        partree          (no result)      (no result)
+           prsa          (no result)      (no result)
+         queens          (no result)      (no result)
+            ray          (no result)      (no result)
+       sumeuler          (no result)      (no result)
+      transclos          (no result)      (no result)
+        -1 s.d.                -----            -----
+        +1 s.d.                -----            -----
+        Average                -----            -----
+
+Memory Reads
+
+-------------------------------------------------------------------------------
+        Program                  meh              meh
+-------------------------------------------------------------------------------
+   blackscholes          (no result)      (no result)
+          coins          (no result)      (no result)
+           gray          (no result)      (no result)
+         mandel          (no result)      (no result)
+        matmult          (no result)      (no result)
+        minimax          (no result)      (no result)
+          nbody          (no result)      (no result)
+         parfib          (no result)      (no result)
+        partree          (no result)      (no result)
+           prsa          (no result)      (no result)
+         queens          (no result)      (no result)
+            ray          (no result)      (no result)
+       sumeuler          (no result)      (no result)
+      transclos          (no result)      (no result)
+        -1 s.d.                -----            -----
+        +1 s.d.                -----            -----
+        Average                -----            -----
+
+Memory Writes
+
+-------------------------------------------------------------------------------
+        Program                  meh              meh
+-------------------------------------------------------------------------------
+   blackscholes          (no result)      (no result)
+          coins          (no result)      (no result)
+           gray          (no result)      (no result)
+         mandel          (no result)      (no result)
+        matmult          (no result)      (no result)
+        minimax          (no result)      (no result)
+          nbody          (no result)      (no result)
+         parfib          (no result)      (no result)
+        partree          (no result)      (no result)
+           prsa          (no result)      (no result)
+         queens          (no result)      (no result)
+            ray          (no result)      (no result)
+       sumeuler          (no result)      (no result)
+      transclos          (no result)      (no result)
+        -1 s.d.                -----            -----
+        +1 s.d.                -----            -----
+        Average                -----            -----
+
+Cache Misses
+
+-------------------------------------------------------------------------------
+        Program                  meh              meh
+-------------------------------------------------------------------------------
+   blackscholes          (no result)      (no result)
+          coins          (no result)      (no result)
+           gray          (no result)      (no result)
+         mandel          (no result)      (no result)
+        matmult          (no result)      (no result)
+        minimax          (no result)      (no result)
+          nbody          (no result)      (no result)
+         parfib          (no result)      (no result)
+        partree          (no result)      (no result)
+           prsa          (no result)      (no result)
+         queens          (no result)      (no result)
+            ray          (no result)      (no result)
+       sumeuler          (no result)      (no result)
+      transclos          (no result)      (no result)
+        -1 s.d.                -----            -----
+        +1 s.d.                -----            -----
+        Average                -----            -----
+
+Total Memory in use
+
+-------------------------------------------------------------------------------
+        Program                  meh              meh
+-------------------------------------------------------------------------------
+   blackscholes             67108864             0.0%
+          coins            661651456            +0.8%
+           gray              4194304             0.0%
+         mandel             65011712            -1.6%
+        matmult             28311552            +0.7%
+        minimax              3145728             0.0%
+          nbody              2097152             0.0%
+         parfib              2097152             0.0%
+        partree              6606028            -4.8%
+           prsa              3145728             0.0%
+         queens              6291456             0.0%
+            ray              3145728             0.0%
+       sumeuler              2097152             0.0%
+      transclos              3145728             0.0%
+        -1 s.d.                -----            -1.7%
+        +1 s.d.                -----            +1.0%
+        Average                -----            -0.4%
+Module Sizes
+
+-------------------------------------------------------------------------------
+        Program                  meh              meh
+-------------------------------------------------------------------------------
+
+blackscholes
+(no modules compiled)
+
+
+coins
+(no modules compiled)
+
+
+gray
+(no modules compiled)
+
+
+mandel
+(no modules compiled)
+
+
+matmult
+(no modules compiled)
+
+
+minimax
+(no modules compiled)
+
+
+nbody
+(no modules compiled)
+
+
+parfib
+(no modules compiled)
+
+
+partree
+(no modules compiled)
+
+
+prsa
+(no modules compiled)
+
+
+queens
+(no modules compiled)
+
+
+ray
+(no modules compiled)
+
+
+sumeuler
+(no modules compiled)
+
+
+transclos
+(no modules compiled)
+
+
+        -1 s.d.     
+        +1 s.d.     
+        Average     
+
+Compile Times
+
+-------------------------------------------------------------------------------
+        Program                  meh              meh
+-------------------------------------------------------------------------------
+
+blackscholes
+(no modules compiled)
+
+
+coins
+(no modules compiled)
+
+
+gray
+(no modules compiled)
+
+
+mandel
+(no modules compiled)
+
+
+matmult
+(no modules compiled)
+
+
+minimax
+(no modules compiled)
+
+
+nbody
+(no modules compiled)
+
+
+parfib
+(no modules compiled)
+
+
+partree
+(no modules compiled)
+
+
+prsa
+(no modules compiled)
+
+
+queens
+(no modules compiled)
+
+
+ray
+(no modules compiled)
+
+
+sumeuler
+(no modules compiled)
+
+
+transclos
+(no modules compiled)
+
+
+        -1 s.d.     
+        +1 s.d.     
+        Average     
+
+Compile Allocations
+
+-------------------------------------------------------------------------------
+        Program                  meh              meh
+-------------------------------------------------------------------------------
+
+blackscholes
+(no modules compiled)
+
+
+coins
+(no modules compiled)
+
+
+gray
+(no modules compiled)
+
+
+mandel
+(no modules compiled)
+
+
+matmult
+(no modules compiled)
+
+
+minimax
+(no modules compiled)
+
+
+nbody
+(no modules compiled)
+
+
+parfib
+(no modules compiled)
+
+
+partree
+(no modules compiled)
+
+
+prsa
+(no modules compiled)
+
+
+queens
+(no modules compiled)
+
+
+ray
+(no modules compiled)
+
+
+sumeuler
+(no modules compiled)
+
+
+transclos
+(no modules compiled)
+
+
+        -1 s.d.     
+        +1 s.d.     
+        Average     

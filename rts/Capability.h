@@ -116,6 +116,9 @@ struct Capability_ {
     StgTSO *hrun_queue_top;
     StgTSO *hrun_queue_current;
     StgTSO *hlast_run;
+    StgTSO *cached_tso; // Used to "pushOnRunQueue"
+
+    StgInt64 unprocessed_ticks;
 
 #if defined(THREADED_RTS)
     // Worker Tasks waiting in the wings.  Singly-linked.
@@ -478,5 +481,7 @@ INLINE_HEADER bool emptyInbox(Capability *cap)
 }
 
 #endif
+
+void handleTick(void);
 
 #include "EndPrivate.h"
