@@ -242,10 +242,10 @@ popRunQueueH (Capability *cap)
   StgTSO *next = nextHThread(cap);
 
   cap->hrun_queue_current = next;
-  while (next->isDone || next->why_blocked != NotBlocked) {
-    next = nextHThread(cap);
-    cap->hrun_queue_current = next;
-  }
+  //while (next->isDone || next->why_blocked != NotBlocked ) {
+  //  next = nextHThread(cap);
+  //  cap->hrun_queue_current = next;
+  //}
   debugTrace(DEBUG_sched, "HSched: Queueing up TSO %d", next->id);
   ASSERT(next != END_TSO_QUEUE);
   ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
@@ -288,7 +288,8 @@ peekRunQueueH (Capability *cap)
   StgTSO *current = cap->hrun_queue_current;
   StgTSO *next = nextHThread(cap);
   cap->hrun_queue_current = next;
-  while (next->isDone) {
+  while (next->isDone ||
+    (next->why_blocked != NotBlocked && next->why_blocked != BlockedOnCCall)) {
     next = nextHThread(cap);
     cap->hrun_queue_current = next;
   }

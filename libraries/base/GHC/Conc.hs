@@ -28,6 +28,7 @@ module GHC.Conc
         -- * Forking and suchlike
         , forkIO
         , forkIOWithUnmask
+        , forkIOWithTicks
         , forkOn
         , forkOnWithUnmask
         , numCapabilities

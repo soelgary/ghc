@@ -909,6 +909,30 @@ stg_forkzh ( gcptr closure )
     return (threadid);
 }
 
+stg_forkWithTickszh (W_ ticks, gcptr closure )
+{
+    MAYBE_GC_P(stg_forkzh, closure);
+
+    gcptr threadid;
+
+    ("ptr" threadid) = ccall createIOThread( MyCapability() "ptr",
+                                  CurrentTSO "ptr",
+                                  RtsFlags_GcFlags_initialStkSize(RtsFlags),
+                                  closure "ptr");
+
+    /* start blocked if the current thread is blocked */
+    StgTSO_flags(threadid) = %lobits16(
+        TO_W_(StgTSO_flags(threadid)) |
+        TO_W_(StgTSO_flags(CurrentTSO)) & (TSO_BLOCKEX | TSO_INTERRUPTIBLE));
+
+    StgTSO_ticks(threadid) = ticks;
+
+    ccall scheduleThread(MyCapability() "ptr", threadid "ptr");
+
+
+    return (threadid);
+}
+
 stg_forkOnzh ( W_ cpu, gcptr closure )
 {
 again: MAYBE_GC(again);

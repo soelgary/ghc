@@ -323,11 +323,15 @@ pop_thread:
     //
     while(1) {
       t = popRunQueue(cap);
-      if (t->why_blocked != NotBlocked && t->why_blocked != BlockedOnCCall) {
+      if ((t->why_blocked != NotBlocked)) {
         busyWaitUntilTimeSliceEnd(cap, t);
-      } else if (t == END_TSO_QUEUE) {
-        barf("Scheduling end tso queue");
+      } else if (t->what_next == ThreadComplete) {
+        busyWaitUntilTimeSliceEnd(cap, t);
+      } else if (t->what_next == ThreadKilled) {
+        // skip without busy wait
       } else {
+        ASSERT(!t->isDone);
+        ASSERT(t != END_TSO_QUEUE);
         break;
       }
     }
@@ -3187,7 +3191,7 @@ void
 busyWaitUntilTimeSliceEnd(Capability *cap, StgTSO *t)
 {
   debugTrace(DEBUG_sched, "Busy wait for TSO %d", t->id);
-  while (t->ticks_remaining > 0) {
+  while (t->ticks_remaining > 0 && t->ticks > 0) {
     t->ticks_remaining -= cap->unprocessed_ticks;
     //debugTrace(DEBUG_sched, "TSO %d has %d remaining ticks", t->id, t->ticks_remaining);
   }

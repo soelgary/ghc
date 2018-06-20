@@ -36,6 +36,7 @@ module GHC.Conc.Sync
 
         -- * Forking and suchlike
         , forkIO
+        , forkIOWithTicks
         , forkIOWithUnmask
         , forkOn
         , forkOnWithUnmask
@@ -280,6 +281,14 @@ forkIO :: IO () -> IO ThreadId
 forkIO action = IO $ \ s ->
    case (fork# action_plus s) of (# s1, tid #) -> (# s1, ThreadId tid #)
  where
+  -- We must use 'catch' rather than 'catchException' because the action
+  -- could be bottom. #13330
+  action_plus = catch action childHandler
+
+forkIOWithTicks :: Int -> IO () -> IO ThreadId
+forkIOWithTicks (I# ticks) action = IO $ \ s ->
+    case (forkWithTicks# ticks action_plus s) of (# s1, tid #) -> (# s1, ThreadId tid #)
+  where
   -- We must use 'catch' rather than 'catchException' because the action
   -- could be bottom. #13330
   action_plus = catch action childHandler

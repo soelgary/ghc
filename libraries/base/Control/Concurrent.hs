@@ -35,6 +35,7 @@ module Control.Concurrent (
         myThreadId,
 
         forkIO,
+        forkIOWithTicks,
         forkFinally,
         forkIOWithUnmask,
         killThread,

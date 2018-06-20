@@ -446,6 +446,7 @@ wanteds os = concat
           ,closureField  C    "StgTSO"      "saved_errno"
           ,closureField  C    "StgTSO"      "trec"
           ,closureField  C    "StgTSO"      "flags"
+          ,closureField  C    "StgTSO"      "ticks"
           ,closureField  C    "StgTSO"      "dirty"
           ,closureField  C    "StgTSO"      "bq"
           ,closureField  Both "StgTSO"      "alloc_limit"
