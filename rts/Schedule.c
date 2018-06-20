@@ -420,7 +420,7 @@ run_thread:
 
   t->ticks_remaining -= cap->unprocessed_ticks;
   cap->unprocessed_ticks = 0;
-  if (t->ticks_remaining <= 0) {
+  if (t->ticks_remaining <= 0 && t->ticks != 0) {
     t->ticks_remaining = t->ticks;
     goto pop_thread;
   }

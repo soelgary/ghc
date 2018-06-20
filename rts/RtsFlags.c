@@ -254,6 +254,9 @@ void initRtsFlagsDefaults(void)
     RtsFlags.TickyFlags.showTickyStats   = false;
     RtsFlags.TickyFlags.tickyFile        = NULL;
 #endif
+
+  // Hierarchical run queue
+  RtsFlags.HRunQueueFlags.ticks = 0;
 }
 
 static const char *
@@ -271,6 +274,8 @@ usage_text[] = {
 "  -?       Prints this message and exits; the program is not executed",
 "  --info   Print information about the RTS used by this program",
 "",
+"  --ticks=<n> Sets the default number of ticks to run threads for in the",
+"              hiearchical run queue (default: 0)",
 "  -K<size>  Sets the maximum stack size (default: 80% of the heap)",
 "            Egs: -K32k -K512k -K8M",
 "  -ki<size> Sets the initial thread stack size (default 1k)  Egs: -ki4k -ki2m",
@@ -837,7 +842,6 @@ errorBelch("the flag %s requires the program to be built with -debug", \
            rts_argv[arg]);                                             \
 error = true;
 #endif
-
               /* =========== GENERAL ========================== */
               case '?':
                 OPTION_SAFE;
@@ -894,6 +898,7 @@ error = true;
                       printRtsInfo();
                       stg_exit(0);
                   }
+
 #if defined(THREADED_RTS)
                   else if (!strncmp("numa", &rts_argv[arg][2], 4)) {
                       OPTION_SAFE;
@@ -950,6 +955,22 @@ error = true;
                       }
                       break;
                   }
+
+                  else if (!strncmp("ticks=", &rts_argv[arg][2], 6)) {
+                      OPTION_SAFE;
+                      if (rts_argv[arg][2] == '\0') {
+                          /* use default */
+                      } else {
+                          int ticks = strtol(rts_argv[arg]+8, (char **) NULL, 10);
+                          if (ticks < 0) {
+                            error = true;
+                            errorBelch("--ticks must be greater than 0");
+                          }
+                          RtsFlags.HRunQueueFlags.ticks = ticks;
+                      }
+                      break;
+                  }
+
                   else {
                       OPTION_SAFE;
                       errorBelch("unknown RTS option: %s",rts_argv[arg]);
@@ -1140,10 +1161,10 @@ error = true;
                 break;
 
               case 'T':
-                  OPTION_SAFE;
-                  RtsFlags.GcFlags.giveStats = COLLECT_GC_STATS;
-                  unchecked_arg_start++;
-                  goto check_rest; /* Don't initialize statistics file. */
+                    OPTION_SAFE;
+                    RtsFlags.GcFlags.giveStats = COLLECT_GC_STATS;
+                    unchecked_arg_start++;
+                    goto check_rest; /* Don't initialize statistics file. */
 
               case 'S':
                   OPTION_SAFE; /* but see below */

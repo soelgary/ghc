@@ -234,12 +234,16 @@ typedef struct _TICKY_FLAGS {
     FILE   *tickyFile;
 } TICKY_FLAGS;
 
+typedef struct _HRUN_QUEUE_FLAGS {
+  int ticks;
+} HRUN_QUEUE_FLAGS;
+
 /* Put them together: */
 
 /* See Note [Synchronization of flags and base APIs] */
 typedef struct _RTS_FLAGS {
     /* The first portion of RTS_FLAGS is invariant. */
-    GC_FLAGS	      GcFlags;
+    GC_FLAGS	        GcFlags;
     CONCURRENT_FLAGS  ConcFlags;
     MISC_FLAGS        MiscFlags;
     DEBUG_FLAGS	      DebugFlags;
@@ -247,7 +251,8 @@ typedef struct _RTS_FLAGS {
     PROFILING_FLAGS   ProfFlags;
     TRACE_FLAGS       TraceFlags;
     TICKY_FLAGS	      TickyFlags;
-    PAR_FLAGS	      ParFlags;
+    PAR_FLAGS	        ParFlags;
+    HRUN_QUEUE_FLAGS  HRunQueueFlags;
 } RTS_FLAGS;
 
 #if defined(COMPILING_RTS_MAIN)

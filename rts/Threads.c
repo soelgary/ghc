@@ -135,8 +135,13 @@ createThread(Capability *cap, W_ size)
     tso->isHThread = false;
     tso->isDone = false;
 
-    tso->ticks = 2;
-    tso->ticks_remaining = 2;
+    /*
+      Ticks of 0 means the thread will never busry wait. This must be changed
+      by the application---this can be done with a special fork function or
+      set_ticks
+    */
+    tso->ticks = RtsFlags.HRunQueueFlags.ticks;
+    tso->ticks_remaining = 0;
     tso->timeout = -1;
     tso->has_timeout = false;
     tso->suspendTicks = -1;
