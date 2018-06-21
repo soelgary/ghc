@@ -154,7 +154,7 @@ static void scheduleDoGC(Capability **pcap, Task *task, bool force_major);
 static void deleteThread (Capability *cap, StgTSO *tso);
 static void deleteAllThreads (Capability *cap);
 
-void busyWaitUntilTimeSliceEnd(Capability *cap, StgTSO *t);
+bool busyWaitUntilTimeSliceEnd(Capability *cap, StgTSO *t);
 
 #if defined(FORKPROCESS_PRIMOP_SUPPORTED)
 static void deleteThread_(Capability *cap, StgTSO *tso);
@@ -247,7 +247,7 @@ schedule (Capability *initialCapability, Task *task)
     //
     //   * We might be left with threads blocked in foreign calls,
     //     we should really attempt to kill these somehow (TODO).
-
+cont_busy_wait:
     switch (sched_state) {
     case SCHED_RUNNING:
         break;
@@ -317,16 +317,25 @@ schedule (Capability *initialCapability, Task *task)
     }
 #endif
 
+  int cont;
+
 pop_thread:
     //
     // Get a thread to run
     //
     while(1) {
+      cont = false;
       t = popRunQueue(cap);
       if ((t->why_blocked != NotBlocked)) {
-        busyWaitUntilTimeSliceEnd(cap, t);
+        if (!busyWaitUntilTimeSliceEnd(cap, t)) {
+          cont = true;
+          break;
+        }
       } else if (t->what_next == ThreadComplete) {
-        busyWaitUntilTimeSliceEnd(cap, t);
+        if (!busyWaitUntilTimeSliceEnd(cap, t)) {
+          cont = true;
+          break;
+        }
       } else if (t->what_next == ThreadKilled) {
         // skip without busy wait
       } else {
@@ -335,9 +344,6 @@ pop_thread:
         break;
       }
     }
-
-    
-
 
     // Sanity check the thread we're about to run.  This can be
     // expensive if there is lots of thread switching going on...
@@ -422,8 +428,7 @@ pop_thread:
 
 run_thread:
 
-  t->ticks_remaining -= cap->unprocessed_ticks;
-  cap->unprocessed_ticks = 0;
+  processTick(cap, t);
   if (t->ticks_remaining <= 0 && t->ticks != 0) {
     t->ticks_remaining = t->ticks;
     goto pop_thread;
@@ -470,6 +475,7 @@ run_thread:
         if (prev == ACTIVITY_DONE_GC) {
 #if !defined(PROFILING)
             startTimer();
+            if (cont) goto cont_busy_wait;
 #endif
         }
         break;
@@ -3187,14 +3193,19 @@ countChildren(StgTSO *tso)
   return count;
 }
 
-void
+bool
 busyWaitUntilTimeSliceEnd(Capability *cap, StgTSO *t)
 {
   debugTrace(DEBUG_sched, "Busy wait for TSO %d", t->id);
   while (t->ticks_remaining > 0 && t->ticks > 0) {
-    t->ticks_remaining -= cap->unprocessed_ticks;
-    //debugTrace(DEBUG_sched, "TSO %d has %d remaining ticks", t->id, t->ticks_remaining);
+    processTick(cap, t);
+    if (timerStopped()) {
+      cap->cached_tso = t;
+      debugTrace(DEBUG_sched, "Timer stopped. Exiting busy wait for tso %d", t->id);
+      return false;
+    }
   }
   debugTrace(DEBUG_sched, "TSO %d done waiting (%d)", t->id, t->ticks_remaining);
   t->ticks_remaining = t->ticks;
+  return true;
 }

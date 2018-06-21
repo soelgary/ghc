@@ -31,6 +31,8 @@
 /* idle ticks left before we perform a GC */
 static int ticks_to_gc = 0;
 
+bool timeStopped = true;
+
 /*
  * Function: handle_tick()
  *
@@ -120,6 +122,7 @@ startTimer(void)
     if (atomic_dec(&timer_disabled) == 0) {
         if (RtsFlags.MiscFlags.tickInterval != 0) {
             startTicker();
+            timeStopped = false;
         }
     }
 }
@@ -130,8 +133,15 @@ stopTimer(void)
     if (atomic_inc(&timer_disabled, 1) == 1) {
         if (RtsFlags.MiscFlags.tickInterval != 0) {
             stopTicker();
+            timeStopped = true;
         }
     }
+}
+
+bool
+timerStopped(void)
+{
+  return timeStopped;
 }
 
 void

@@ -10,3 +10,4 @@
 
 RTS_PRIVATE void initTimer (void);
 RTS_PRIVATE void exitTimer (bool wait);
+RTS_PRIVATE bool timerStopped (void);
