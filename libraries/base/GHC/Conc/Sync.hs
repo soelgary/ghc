@@ -36,7 +36,9 @@ module GHC.Conc.Sync
 
         -- * Forking and suchlike
         , forkIO
+        , hFork
         , forkIOWithTicks
+        , forkIOWithTimeout
         , forkIOWithUnmask
         , forkOn
         , forkOnWithUnmask
@@ -55,6 +57,8 @@ module GHC.Conc.Sync
         , yield
         , labelThread
         , mkWeakThreadId
+        , getThreadTicks
+
 
         , ThreadStatus(..), BlockReason(..)
         , threadStatus
@@ -285,13 +289,24 @@ forkIO action = IO $ \ s ->
   -- could be bottom. #13330
   action_plus = catch action childHandler
 
-forkIOWithTicks :: Int -> IO () -> IO ThreadId
-forkIOWithTicks (I# ticks) action = IO $ \ s ->
-    case (forkWithTicks# ticks action_plus s) of (# s1, tid #) -> (# s1, ThreadId tid #)
-  where
+hFork :: Int -> Int -> IO () -> IO ThreadId
+hFork (I# timeout) (I# ticks) action = IO $ \ s ->
+  case (hFork# timeout ticks action_plus s) of (# s1, tid #) -> (# s1, ThreadId tid #)
+ where
   -- We must use 'catch' rather than 'catchException' because the action
   -- could be bottom. #13330
   action_plus = catch action childHandler
+
+forkIOWithTicks :: Int -> IO () -> IO ThreadId
+forkIOWithTicks ticks action = hFork 0 ticks action
+
+forkIOWithTimeout :: Int -> IO () -> IO ThreadId
+forkIOWithTimeout timeout action = hFork timeout 0 action
+
+getThreadTicks :: () -> IO Int
+getThreadTicks () = IO $ \ s ->
+  case (getThreadTicks# s) of
+    (# s1, ticks# #) -> (# s1, I# ticks# #)
 
 -- | Like 'forkIO', but the child thread is passed a function that can
 -- be used to unmask asynchronous exceptions.  This function is

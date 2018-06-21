@@ -28,7 +28,9 @@ module GHC.Conc
         -- * Forking and suchlike
         , forkIO
         , forkIOWithUnmask
+        , hFork
         , forkIOWithTicks
+        , forkIOWithTimeout
         , forkOn
         , forkOnWithUnmask
         , numCapabilities
@@ -46,6 +48,8 @@ module GHC.Conc
         , yield
         , labelThread
         , mkWeakThreadId
+
+        , getThreadTicks
 
         , ThreadStatus(..), BlockReason(..)
         , threadStatus

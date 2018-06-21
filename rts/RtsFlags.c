@@ -256,7 +256,9 @@ void initRtsFlagsDefaults(void)
 #endif
 
   // Hierarchical run queue
-  RtsFlags.HRunQueueFlags.ticks = 0;
+  RtsFlags.HRunQueueFlags.ticks       = 0;
+  RtsFlags.HRunQueueFlags.timeout     = 0;
+  RtsFlags.HRunQueueFlags.has_timeout = false;
 }
 
 static const char *
@@ -276,6 +278,8 @@ usage_text[] = {
 "",
 "  --ticks=<n> Sets the default number of ticks to run threads for in the",
 "              hiearchical run queue (default: 0)",
+"  --timeout=<n> Sets the default number of ticks to run threads for before",
+"                they time out"
 "  -K<size>  Sets the maximum stack size (default: 80% of the heap)",
 "            Egs: -K32k -K512k -K8M",
 "  -ki<size> Sets the initial thread stack size (default 1k)  Egs: -ki4k -ki2m",
@@ -967,6 +971,22 @@ error = true;
                             errorBelch("--ticks must be greater than 0");
                           }
                           RtsFlags.HRunQueueFlags.ticks = ticks;
+                      }
+                      break;
+                  }
+
+                  else if (!strncmp("timeout=", &rts_argv[arg][2], 8)) {
+                      OPTION_SAFE;
+                      if (rts_argv[arg][2] == '\0') {
+                          /* use default */
+                      } else {
+                          int timeout = strtol(rts_argv[arg]+10, (char **) NULL, 10);
+                          if (timeout < 0) {
+                            error = true;
+                            errorBelch("--timeout must be greater than 0");
+                          }
+                          RtsFlags.HRunQueueFlags.timeout = timeout;
+                          RtsFlags.HRunQueueFlags.has_timeout = true;
                       }
                       break;
                   }

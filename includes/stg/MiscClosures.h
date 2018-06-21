@@ -422,7 +422,9 @@ RTS_FUN_DECL(stg_compactFixupPointerszh);
 RTS_FUN_DECL(stg_compactSizzezh);
 
 RTS_FUN_DECL(stg_forkzh);
-RTS_FUN_DECL(stg_forkWithTickszh);
+RTS_FUN_DECL(stg_hForkzh);
+RTS_FUN_DECL(stg_getThreadTickszh);
+RTS_FUN_DECL(stg_setThreadTickszh);
 RTS_FUN_DECL(stg_forkOnzh);
 RTS_FUN_DECL(stg_yieldzh);
 RTS_FUN_DECL(stg_killMyself);

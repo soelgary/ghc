@@ -27,6 +27,7 @@
 #include "STM.h"
 #include "RtsUtils.h"
 #include "sm/OSMem.h"
+#include "RaiseAsync.h"
 
 #if !defined(mingw32_HOST_OS)
 #include "rts/IOManager.h" // for setIOManagerControlFd()
@@ -1267,7 +1268,9 @@ setIOManagerControlFd(uint32_t cap_no USED_IF_THREADS, int fd USED_IF_THREADS) {
 void
 capabilityHandleTick(Capability *cap)
 {
+  ACQUIRE_LOCK(&cap->lock);
   cap->unprocessed_ticks++;
+  RELEASE_LOCK(&cap->lock);
 }
 
 /*
@@ -1280,4 +1283,22 @@ handleTick()
   for (i=0; i < n_capabilities; i++) {
     capabilityHandleTick(capabilities[i]);
   }
+}
+
+/*
+  Process the unprocessed ticks for the TSO
+*/
+void
+processTick(Capability *cap, StgTSO *tso)
+{
+  ACQUIRE_LOCK(&cap->lock);
+  tso->ticks_remaining -= cap->unprocessed_ticks;
+  if (tso->has_timeout) {
+    tso->timeout -= cap->unprocessed_ticks;
+    if (tso->timeout <= 0) {
+      throwToSelf(cap, tso, NULL /* NULL exception will kill the thread */);
+    }
+  }
+  cap->unprocessed_ticks = 0;
+  RELEASE_LOCK(&cap->lock);
 }

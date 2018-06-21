@@ -2382,8 +2382,8 @@ primop  ForkOp "fork#" GenPrimOp
    has_side_effects = True
    out_of_line      = True
 
-primop  ForkWithTicksOp "forkWithTicks#" GenPrimOp
-   Int# -> a -> State# RealWorld -> (# State# RealWorld, ThreadId# #)
+primop  HierarchicalFork "hFork#" GenPrimOp
+   Int# -> Int# -> a -> State# RealWorld -> (# State# RealWorld, ThreadId# #)
    with
    has_side_effects = True
    out_of_line      = True
@@ -2435,6 +2435,16 @@ primop  ThreadStatusOp "threadStatus#" GenPrimOp
    with
    out_of_line = True
    has_side_effects = True
+
+primop  GetThreadTicks "getThreadTicks#" GenPrimOp
+   State# RealWorld -> (# State# RealWorld, Int# #)
+   with
+   out_of_line = True
+
+primop  SetThreadTicks "setThreadTicks#" GenPrimOp
+   Int# -> State# RealWorld -> State# RealWorld
+   with
+   out_of_line = True
 
 ------------------------------------------------------------------------
 section "Weak pointers"

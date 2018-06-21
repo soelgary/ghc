@@ -235,7 +235,9 @@ typedef struct _TICKY_FLAGS {
 } TICKY_FLAGS;
 
 typedef struct _HRUN_QUEUE_FLAGS {
-  int ticks;
+  int  ticks;
+  int  timeout;
+  bool has_timeout;
 } HRUN_QUEUE_FLAGS;
 
 /* Put them together: */

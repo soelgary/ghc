@@ -35,11 +35,15 @@ module Control.Concurrent (
         myThreadId,
 
         forkIO,
+        hFork,
         forkIOWithTicks,
+        forkIOWithTimeout,
         forkFinally,
         forkIOWithUnmask,
         killThread,
         throwTo,
+
+        getThreadTicks,
 
         -- ** Threads with affinity
         forkOn,

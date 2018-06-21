@@ -909,9 +909,9 @@ stg_forkzh ( gcptr closure )
     return (threadid);
 }
 
-stg_forkWithTickszh (W_ ticks, gcptr closure )
+stg_hForkzh (W_ timeout, W_ ticks, gcptr closure )
 {
-    MAYBE_GC_P(stg_forkzh, closure);
+    MAYBE_GC_P(stg_hForkzh, closure);
 
     gcptr threadid;
 
@@ -931,6 +931,17 @@ stg_forkWithTickszh (W_ ticks, gcptr closure )
 
 
     return (threadid);
+}
+
+stg_getThreadTickszh (gcptr closure)
+{
+    return (StgTSO_ticks(CurrentTSO));
+}
+
+stg_setThreadTickszh (W_ ticks, gcptr closure)
+{
+    StgTSO_ticks(CurrentTSO) = ticks;
+    return ();
 }
 
 stg_forkOnzh ( W_ cpu, gcptr closure )

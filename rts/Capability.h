@@ -483,5 +483,6 @@ INLINE_HEADER bool emptyInbox(Capability *cap)
 #endif
 
 void handleTick(void);
+void processTick(Capability *cap, StgTSO *tso);
 
 #include "EndPrivate.h"
