@@ -953,7 +953,7 @@ stg_tickDelayzh (W_ ticks)
   StgTSO_suspendTicks(CurrentTSO) = ticks;
   StgTSO_suspended(CurrentTSO) = 1 :: CInt;
   StgRegTable_rRet(BaseReg) = ThreadSuspend;
-  return ();
+  jump stg_yield_noregs();
 }
 
 stg_forkOnzh ( W_ cpu, gcptr closure )
