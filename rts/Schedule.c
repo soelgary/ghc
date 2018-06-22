@@ -137,7 +137,7 @@ static void scheduleStartSignalHandlers (Capability *cap);
 static void scheduleCheckBlockedThreads (Capability *cap);
 static void scheduleProcessInbox(Capability **cap);
 static void scheduleDetectDeadlock (Capability **pcap, Task *task);
-static void schedulePushWork(Capability *cap, Task *task);
+static void schedulePushWork(Capability *cap, Task *task) __attribute__((unused));
 #if defined(THREADED_RTS)
 static void scheduleActivateSpark(Capability *cap);
 #endif
@@ -281,7 +281,8 @@ cont_busy_wait:
 
     /* work pushing, currently relevant only for THREADED_RTS:
        (pushes threads, wakes up idle capabilities for stealing) */
-    schedulePushWork(cap,task);
+    // TODO HS: Can we share work and be safe?
+    //schedulePushWork(cap,task);
 
     scheduleDetectDeadlock(&cap,task);
 
@@ -535,6 +536,7 @@ run_thread:
         t->suspended = false;
       } else {
         ret = ThreadSuspend;
+        t->what_next = ThreadSuspend;
       }
       break;
     }
@@ -2634,8 +2636,10 @@ scheduleThreadOn(__attribute__((__unused__))Capability *cap, __attribute__((__un
     cpu %= enabled_capabilities;
     if (cpu == cap->no) {
         appendToRunQueue(cap,tso);
-    } else {
+    } else if (!tso->isHThread) {
         migrateThread(cap, tso, capabilities[cpu]);
+    } else {
+      appendToRunQueue(cap, tso);
     }
 #else
     appendToRunQueue(cap,tso);
