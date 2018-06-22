@@ -38,9 +38,11 @@ module Control.Concurrent (
         hFork,
         forkIOWithTicks,
         forkIOWithTimeout,
+        tickDelay,
         forkFinally,
         forkIOWithUnmask,
         killThread,
+        hKillThread,
         throwTo,
 
         getThreadTicks,

@@ -37,6 +37,7 @@ module GHC.Conc.Sync
         -- * Forking and suchlike
         , forkIO
         , hFork
+        , tickDelay
         , forkIOWithTicks
         , forkIOWithTimeout
         , forkIOWithUnmask
@@ -50,6 +51,7 @@ module GHC.Conc.Sync
         , childHandler
         , myThreadId
         , killThread
+        , hKillThread
         , throwTo
         , par
         , pseq
@@ -308,6 +310,10 @@ getThreadTicks () = IO $ \ s ->
   case (getThreadTicks# s) of
     (# s1, ticks# #) -> (# s1, I# ticks# #)
 
+tickDelay :: Int -> IO ()
+tickDelay (I# ticks) = IO $ \ s ->
+  case (tickDelay# ticks s) of s1 -> (# s1, () #)
+
 -- | Like 'forkIO', but the child thread is passed a function that can
 -- be used to unmask asynchronous exceptions.  This function is
 -- typically used in the following way
@@ -449,6 +455,9 @@ thread (GHC only).
 killThread :: ThreadId -> IO ()
 killThread tid = throwTo tid ThreadKilled
 
+hKillThread :: ThreadId -> IO ()
+hKillThread tid = hThrowTo tid ThreadKilled
+
 {- | 'throwTo' raises an arbitrary exception in the target thread (GHC only).
 
 Exception delivery synchronizes between the source and target thread:
@@ -504,6 +513,10 @@ inside 'mask' or 'uninterruptibleMask'.
 throwTo :: Exception e => ThreadId -> e -> IO ()
 throwTo (ThreadId tid) ex = IO $ \ s ->
    case (killThread# tid (toException ex) s) of s1 -> (# s1, () #)
+
+hThrowTo :: Exception e => ThreadId -> e -> IO ()
+hThrowTo (ThreadId tid) ex = IO $ \ s ->
+  case (hKillThread# tid (toException ex) s) of s1 -> (# s1, () #)
 
 -- | Returns the 'ThreadId' of the calling thread (GHC only).
 myThreadId :: IO ThreadId

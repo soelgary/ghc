@@ -31,6 +31,7 @@ module GHC.Conc
         , hFork
         , forkIOWithTicks
         , forkIOWithTimeout
+        , tickDelay
         , forkOn
         , forkOnWithUnmask
         , numCapabilities
@@ -41,6 +42,7 @@ module GHC.Conc
         , childHandler
         , myThreadId
         , killThread
+        , hKillThread
         , throwTo
         , par
         , pseq

@@ -144,7 +144,8 @@ createThread(Capability *cap, W_ size)
     tso->ticks_remaining = 0;
     tso->timeout = RtsFlags.HRunQueueFlags.timeout;
     tso->has_timeout = RtsFlags.HRunQueueFlags.has_timeout;
-    tso->suspendTicks = -1;
+    tso->suspendTicks = 0;
+    tso->suspended = false;
 
     // ToDo: report the stack size in the event?
     traceEventCreateThread(cap, tso);

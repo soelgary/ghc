@@ -1292,7 +1292,11 @@ void
 processTick(Capability *cap, StgTSO *tso)
 {
   ACQUIRE_LOCK(&cap->lock);
+  recent_activity = ACTIVITY_YES;
   tso->ticks_remaining -= cap->unprocessed_ticks;
+  if (tso->suspended) {
+    tso->suspendTicks -= cap->unprocessed_ticks;
+  }
   if (tso->has_timeout) {
     tso->timeout -= cap->unprocessed_ticks;
     if (tso->timeout <= 0) {

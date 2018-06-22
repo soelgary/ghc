@@ -186,6 +186,7 @@ typedef struct StgTSO_ {
     StgInt64 timeout; /* Ticks until this thread times out */
     StgBool has_timeout;
     StgInt64 suspendTicks;
+    StgBool suspended;
 
 #if defined(TICKY_TICKY)
     /* TICKY-specific stuff would go here. */

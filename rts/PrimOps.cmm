@@ -944,6 +944,18 @@ stg_setThreadTickszh (W_ ticks, gcptr closure)
     return ();
 }
 
+// Temporary busy wait -- this is an alternative to IO.threadDeley to be used
+// used in the hierarchical scheduler. It allows a thread to delay execution for
+// a given number of ticks that they execute.
+stg_tickDelayzh (W_ ticks)
+{
+  StgTSO_what_next(CurrentTSO) = ThreadSuspend::I16;
+  StgTSO_suspendTicks(CurrentTSO) = ticks;
+  StgTSO_suspended(CurrentTSO) = 1 :: CInt;
+  StgRegTable_rRet(BaseReg) = ThreadSuspend;
+  return ();
+}
+
 stg_forkOnzh ( W_ cpu, gcptr closure )
 {
 again: MAYBE_GC(again);

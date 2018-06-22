@@ -325,6 +325,52 @@ stg_killThreadzh (P_ target, P_ exception)
     }
 }
 
+stg_hKillThreadzh (P_ target, P_ exception)
+{
+    W_ why_blocked;
+
+    /* Needs 3 words because throwToSingleThreaded uses some stack */
+    STK_CHK_PP (WDS(3), stg_killThreadzh, target, exception);
+    /* We call allocate in throwTo(), so better check for GC */
+    MAYBE_GC_PP (stg_killThreadzh, target, exception);
+
+    /*
+     * We might have killed ourselves.  In which case, better be *very*
+     * careful.  If the exception killed us, then return to the scheduler.
+     * If the exception went to a catch frame, we'll just continue from
+     * the handler.
+     */
+    if (target == CurrentTSO) {
+        /*
+         * So what should happen if a thread calls "throwTo self" inside
+         * unsafePerformIO, and later the closure is evaluated by another
+         * thread?  Presumably it should behave as if throwTo just returned,
+         * and then continue from there.  See #3279, #3288.  This is what
+         * happens: on resumption, we will just jump to the next frame on
+         * the stack, which is the return point for stg_killThreadzh.
+         */
+        R1 = target;
+        R2 = exception;
+        jump stg_killMyself [R1,R2];
+    } else {
+        W_ msg;
+
+        ("ptr" msg) = ccall hThrowTo(MyCapability() "ptr",
+                                     CurrentTSO "ptr",
+                                     target "ptr",
+                                     exception "ptr");
+
+        if (msg == NULL) {
+            return ();
+        } else {
+            StgTSO_why_blocked(CurrentTSO) = BlockedOnMsgThrowTo;
+            StgTSO_block_info(CurrentTSO) = msg;
+            // we must block, and unlock the message before returning
+            jump stg_block_throwto (target, exception);
+        }
+    }
+}
+
 /*
  * We must switch into low-level Cmm in order to raise an exception in
  * the current thread, hence this is in a separate proc with arguments

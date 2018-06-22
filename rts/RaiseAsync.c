@@ -34,6 +34,10 @@ static void throwToSendMsg (Capability *cap USED_IF_THREADS,
                             Capability *target_cap USED_IF_THREADS,
                             MessageThrowTo *msg USED_IF_THREADS);
 
+void throwToChildrenAndSiblings (Capability *cap,
+                                 StgTSO *source,
+                                 StgTSO *target,
+                                 StgClosure *exception);
 /* -----------------------------------------------------------------------------
    throwToSingleThreaded
 
@@ -203,6 +207,8 @@ throwTo (Capability *cap,       // the Capability we hold
 {
     MessageThrowTo *msg;
 
+    ASSERT(!source->suspended);
+
     msg = (MessageThrowTo *) allocate(cap, sizeofW(MessageThrowTo));
     // the message starts locked; see below
     SET_HDR(msg, &stg_WHITEHOLE_info, CCS_SYSTEM);
@@ -224,6 +230,60 @@ throwTo (Capability *cap,       // the Capability we hold
         // cannot unlock it yet, because the calling thread will need
         // to tidy up its state first.
         return msg;
+    }
+}
+
+void
+throwToChildrenAndSiblings (Capability *cap,
+                            StgTSO *source,
+                            StgTSO *target,
+                            StgClosure *exception)
+{
+  // TODO HS: This might explode if there are a lot of children
+  if (target->hlink != END_TSO_QUEUE) {
+    hThrowTo (cap, source, target->hlink, exception);
+  }
+  if (target->children != END_TSO_QUEUE) {
+    hThrowTo (cap, source, target->children, exception);
+  }
+}
+
+MessageThrowTo *
+hThrowTo (Capability *cap,       // the Capability we hold
+          StgTSO *source,        // the TSO sending the exception (or NULL)
+          StgTSO *target,        // the TSO receiving the exception
+          StgClosure *exception) // the exception closure
+{
+  // recursively throw messages
+      MessageThrowTo *msg;
+
+    ASSERT(!source->suspended);
+
+    msg = (MessageThrowTo *) allocate(cap, sizeofW(MessageThrowTo));
+    // the message starts locked; see below
+    SET_HDR(msg, &stg_WHITEHOLE_info, CCS_SYSTEM);
+    msg->source      = source;
+    msg->target      = target;
+    msg->exception   = exception;
+
+    switch (throwToMsg(cap, msg))
+    {
+    case THROWTO_SUCCESS:
+        // unlock the message now, otherwise we leave a WHITEHOLE in
+        // the heap (#6103)
+        SET_HDR(msg, &stg_MSG_THROWTO_info, CCS_SYSTEM);
+        throwToChildrenAndSiblings(cap, source, target, exception);
+        return NULL;
+
+    case THROWTO_BLOCKED:
+    default:
+        // TODO HS
+        barf("Need to handle hierarchical kill THROW_TO_BLOCKED");
+        //throwToChildrenAndSiblings(cap, source, target, exception);
+        // the caller will unlock the message when it is ready.  We
+        // cannot unlock it yet, because the calling thread will need
+        // to tidy up its state first.
+        //return msg;
     }
 }
 

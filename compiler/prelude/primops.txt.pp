@@ -2388,6 +2388,11 @@ primop  HierarchicalFork "hFork#" GenPrimOp
    has_side_effects = True
    out_of_line      = True
 
+primop  TickDelayOp "tickDelay#" GenPrimOp
+   Int# -> State# RealWorld -> State# RealWorld 
+   with has_side_effects = True
+   out_of_line           = True
+
 primop  ForkOnOp "forkOn#" GenPrimOp
    Int# -> a -> State# RealWorld -> (# State# RealWorld, ThreadId# #)
    with
@@ -2395,6 +2400,12 @@ primop  ForkOnOp "forkOn#" GenPrimOp
    out_of_line      = True
 
 primop  KillThreadOp "killThread#"  GenPrimOp
+   ThreadId# -> a -> State# RealWorld -> State# RealWorld
+   with
+   has_side_effects = True
+   out_of_line      = True
+
+primop  HKillThreadOp "hKillThread#"  GenPrimOp
    ThreadId# -> a -> State# RealWorld -> State# RealWorld
    with
    has_side_effects = True

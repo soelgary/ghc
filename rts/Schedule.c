@@ -155,6 +155,7 @@ static void deleteThread (Capability *cap, StgTSO *tso);
 static void deleteAllThreads (Capability *cap);
 
 bool busyWaitUntilTimeSliceEnd(Capability *cap, StgTSO *t);
+bool suspendTSO(Capability *cap, StgTSO *t);
 
 #if defined(FORKPROCESS_PRIMOP_SUPPORTED)
 static void deleteThread_(Capability *cap, StgTSO *tso);
@@ -451,6 +452,11 @@ run_thread:
 
     prev_what_next = t->what_next;
 
+    // Hack because StgTSO->what_next is being overwritten in primops.cmm
+    if (t->suspended) {
+      prev_what_next = ThreadSuspend;
+    }
+
     errno = t->saved_errno;
 #if defined(mingw32_HOST_OS)
     SetLastError(t->saved_winerror);
@@ -503,6 +509,9 @@ run_thread:
     case ThreadRunGHC:
     {
         StgRegTable *r;
+        if (t->suspended) {
+          ASSERT(!t->suspended);
+        }
         r = StgRun((StgFunPtr) stg_returnToStackTop, &cap->r);
         cap = regTableToCapability(r);
         ret = r->rRet;
@@ -518,6 +527,17 @@ run_thread:
         cap = interpretBCO(cap);
         ret = cap->r.rRet;
         break;
+
+    case ThreadSuspend:
+    {
+      if (suspendTSO(cap, t)) {
+        ret = ThreadYielding;
+        t->suspended = false;
+      } else {
+        ret = ThreadSuspend;
+      }
+      break;
+    }
 
     default:
         barf("schedule: invalid prev_what_next=%u field", prev_what_next);
@@ -598,6 +618,8 @@ run_thread:
         }
         ASSERT_FULL_CAPABILITY_INVARIANTS(cap,task);
         break;
+
+    case ThreadSuspend: goto run_thread;
 
     default:
       barf("schedule: invalid thread return code %d", (int)ret);
@@ -747,7 +769,9 @@ scheduleYield (Capability **pcap, Task *task)
     Capability *cap = *pcap;
     bool didGcLast = false;
 
-    ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
+    ASSERT((cap->hrun_queue_current == END_TSO_QUEUE &&
+            cap->hrun_queue_top == END_TSO_QUEUE) ||
+           cap->hrun_queue_current != END_TSO_QUEUE);
 
     // if we have work, and we don't need to give up the Capability, continue.
     //
@@ -3207,5 +3231,27 @@ busyWaitUntilTimeSliceEnd(Capability *cap, StgTSO *t)
   }
   debugTrace(DEBUG_sched, "TSO %d done waiting (%d)", t->id, t->ticks_remaining);
   t->ticks_remaining = t->ticks;
+  return true;
+}
+
+bool
+suspendTSO(Capability *cap, StgTSO *t)
+{
+  debugTrace(DEBUG_sched, "Suspending TSO %d", t->id);
+  if (t->id == 6) {
+    debugTrace(DEBUG_sched, "Suspending 6th. check here");
+  }
+  while (t->suspendTicks > 0) {
+    if ((t->ticks > 0 && t->ticks_remaining > 0) || t->ticks == 0) {
+      processTick(cap, t);
+      if (timerStopped()) {
+        cap->cached_tso = t;
+        debugTrace(DEBUG_sched, "Timer stopped. Exiting suspend for tso %d", t->id);
+        return false;
+      }
+    } else {
+      break;
+    }
+  }
   return true;
 }
