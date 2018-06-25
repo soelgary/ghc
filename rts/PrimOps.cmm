@@ -952,7 +952,6 @@ stg_tickDelayzh (W_ ticks)
   StgTSO_what_next(CurrentTSO) = ThreadSuspend::I16;
   StgTSO_suspendTicks(CurrentTSO) = ticks;
   StgTSO_suspended(CurrentTSO) = 1 :: CInt;
-  StgRegTable_rRet(BaseReg) = ThreadSuspend;
   jump stg_yield_noregs();
 }
 

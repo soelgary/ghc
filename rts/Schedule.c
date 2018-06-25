@@ -309,6 +309,7 @@ cont_busy_wait:
     scheduleYield(&cap,task);
 
     if (emptyRunQueue(cap)) {
+      debugTrace(DEBUG_sched, "Run queue is empty");
       continue; // look for work again
     } 
 #endif
@@ -340,6 +341,9 @@ pop_thread:
         }
       } else if (t->what_next == ThreadKilled) {
         // skip without busy wait
+      } else if (t->skip) {
+        t->skip = false;
+        goto cont_busy_wait;
       } else {
         ASSERT(!t->isDone);
         ASSERT(t != END_TSO_QUEUE);
@@ -430,11 +434,12 @@ pop_thread:
 
 run_thread:
 
-  processTick(cap, t);
   if (t->ticks_remaining <= 0 && t->ticks != 0) {
     t->ticks_remaining = t->ticks;
+    debugTrace(DEBUG_sched, "Gotta pop again (%d)");
     goto pop_thread;
   }
+  processTick(cap, t);
   debugTrace(DEBUG_sched, "Running thread %d with %d remaining ticks", t->id, t->ticks_remaining);
 
     // CurrentTSO is the thread to run. It might be different if we
@@ -516,6 +521,10 @@ run_thread:
         r = StgRun((StgFunPtr) stg_returnToStackTop, &cap->r);
         cap = regTableToCapability(r);
         ret = r->rRet;
+        if (t->suspended) {
+          ret = ThreadSuspend;
+          t->what_next = ThreadSuspend;
+        }
         break;
     }
     case ThreadDone:
@@ -534,6 +543,7 @@ run_thread:
       if (suspendTSO(cap, t)) {
         ret = ThreadYielding;
         t->suspended = false;
+        t->what_next = ThreadRunGHC;
       } else {
         ret = ThreadSuspend;
         t->what_next = ThreadSuspend;
@@ -618,15 +628,27 @@ run_thread:
         if (scheduleHandleThreadFinished(cap, task, t)) {
           return cap;
         }
+        /*
+          TODO HS
+          `ready_to_gc = true` is a hack to get sparks working. In the
+          hierarchical scheduler, when a capability starts running sparks, it
+          will not stop for a GC (at least in parfib). This will initiate a GC
+          so that the spark queue empties and the computation completes.
+
+          This is a poor solution since it will cause lots of unneccessary GCs
+          to occur. I need to think of a better solution.
+        */
+        //ready_to_gc = true;
         ASSERT_FULL_CAPABILITY_INVARIANTS(cap,task);
         break;
 
-    case ThreadSuspend: goto run_thread;
+    case ThreadSuspend: {
+      goto run_thread;
+    }
 
     default:
       barf("schedule: invalid thread return code %d", (int)ret);
     }
-
     if (ready_to_gc || scheduleNeedHeapProfile(ready_to_gc)) {
       scheduleDoGC(&cap,task,false);
     }
@@ -722,14 +744,17 @@ shouldYieldCapability (Capability *cap, Task *task, bool didGcLast, bool yielded
       return true;
     }
     if (cap->n_returning_tasks != 0) {
+      debugTrace(DEBUG_sched, "No returning tasks");
       return true;
     }
     if (!emptyRunQueue(cap)) {
       if (task->incall->tso == NULL) {
         if (peekRunQueue(cap)->bound != NULL) {
+          debugTrace(DEBUG_sched, "Next, bound is null");
           return true;
         } else if (cap->hlast_run == cap->hrun_queue_current &&
                    (cap->hlast_run->id == 4 && !yielded)) {
+          debugTrace(DEBUG_sched, "Refactor me");
           return true;
         } else {
           return false;
@@ -739,9 +764,11 @@ shouldYieldCapability (Capability *cap, Task *task, bool didGcLast, bool yielded
           return false;
         }
         if (peekRunQueue(cap)->bound != task->incall) {
+          debugTrace(DEBUG_sched, "Incall and bound are not the same");
           return true;
         }
         if (cap->hlast_run->bound != task->incall && cap->hlast_run != END_TSO_QUEUE) {
+          debugTrace(DEBUG_sched, "Last run incall and bound are not the same");
           return true;
         }
       }
@@ -770,10 +797,12 @@ scheduleYield (Capability **pcap, Task *task)
 {
     Capability *cap = *pcap;
     bool didGcLast = false;
-
-    ASSERT((cap->hrun_queue_current == END_TSO_QUEUE &&
-            cap->hrun_queue_top == END_TSO_QUEUE) ||
-           cap->hrun_queue_current != END_TSO_QUEUE);
+    debugTrace(DEBUG_sched, "current == END: %d", cap->hrun_queue_current == END_TSO_QUEUE);
+    debugTrace(DEBUG_sched, "top == END: %d", cap->hrun_queue_top == END_TSO_QUEUE);
+    debugTrace(DEBUG_sched, "current != END: %d", cap->hrun_queue_current != END_TSO_QUEUE);
+    //ASSERT((cap->hrun_queue_current == END_TSO_QUEUE &&
+    //        cap->hrun_queue_top == END_TSO_QUEUE) ||
+    //       cap->hrun_queue_current != END_TSO_QUEUE);
 
     // if we have work, and we don't need to give up the Capability, continue.
     //
@@ -866,7 +895,7 @@ schedulePushWork(Capability *cap USED_IF_THREADS,
     //   - giving low priority to moving long-lived threads
 
     if (n_free_caps > 0) {
-        StgTSO *prev, *t, *next;
+        //StgTSO *prev, *t, *next;
 
         debugTrace(DEBUG_sched,
                    "cap %d: %d threads, %d sparks, and %d free capabilities, sharing...",
@@ -877,7 +906,7 @@ schedulePushWork(Capability *cap USED_IF_THREADS,
         // evently between them, *except* that if the run queue does not divide
         // evenly by n_free_caps+1 then we bias towards the current capability.
         // e.g. with n_run_queue=4, n_free_caps=2, we will keep 2.
-        uint32_t keep_threads =
+        /*uint32_t keep_threads =
             (cap->n_run_queue + n_free_caps) / (n_free_caps + 1);
 
         // This also ensures that we don't give away all our threads, since
@@ -940,7 +969,7 @@ schedulePushWork(Capability *cap USED_IF_THREADS,
             setTSOLink(cap, prev, t);
         }
         cap->n_run_queue = n;
-
+        */
         IF_DEBUG(sanity, checkRunQueue(cap));
 
         // release the capabilities
@@ -1015,7 +1044,7 @@ scheduleDetectDeadlock (Capability **pcap, Task *task)
      * other tasks are waiting for work, we must have a deadlock of
      * some description.
      */
-    if ( emptyThreadQueues(cap) )
+    if ( emptyThreadQueues(cap) && cap->hrun_queue_top == END_TSO_QUEUE)
     {
 #if defined(THREADED_RTS)
         /*
@@ -2511,6 +2540,10 @@ suspendThread (StgRegTable *reg, bool interruptible)
   task = cap->running_task;
   tso = cap->r.rCurrentTSO;
 
+  if (tso->id == 4) {
+      debugTrace(DEBUG_sched, "Suspending thread 4....");
+    }
+
   traceEventStopThread(cap, tso, THREAD_SUSPENDED_FOREIGN_CALL, 0);
 
   // XXX this might not be necessary --SDM
@@ -2563,6 +2596,8 @@ resumeThread (void *task_)
     saved_winerror = GetLastError();
 #endif
 
+    debugTrace(DEBUG_sched, "Trying to resume thread");
+
     incall = task->incall;
     cap = incall->suspended_cap;
     task->cap = cap;
@@ -2575,6 +2610,8 @@ resumeThread (void *task_)
 
     // Remove the thread from the suspended list
     recoverSuspendedTask(cap,task);
+
+    debugTrace(DEBUG_sched, "Resuming thread");
 
     tso = incall->suspended_tso;
     incall->suspended_tso = NULL;
@@ -3198,7 +3235,9 @@ countSiblings(StgTSO *tso)
 {
   uint32_t count = 0;
   while (tso != END_TSO_QUEUE) {
-    if (tso->what_next == ThreadRunGHC && tso->why_blocked == NotBlocked) {
+    if ((tso->what_next == ThreadRunGHC && tso->why_blocked == NotBlocked) ||
+        tso->what_next == ThreadSuspend) {
+      debugTrace(DEBUG_sched, "On queue: %d", tso->id);
       count++;
     }
     count += countChildren(tso->children);
@@ -3212,7 +3251,9 @@ countChildren(StgTSO *tso)
 {
   uint32_t count = 0;
   while (tso != END_TSO_QUEUE) {
-    if (tso->what_next == ThreadRunGHC && tso->why_blocked == NotBlocked) {
+    if ((tso->what_next == ThreadRunGHC && tso->why_blocked == NotBlocked) ||
+        tso->what_next == ThreadSuspend) {
+      debugTrace(DEBUG_sched, "On queue: %d", tso->id);
       count++;
     }
     count += countSiblings(tso->hlink);
@@ -3257,5 +3298,9 @@ suspendTSO(Capability *cap, StgTSO *t)
       break;
     }
   }
-  return true;
+  if (t->suspendTicks < 1) {
+    t->suspended = false;
+    return true;
+  }
+  return false;
 }

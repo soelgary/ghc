@@ -961,6 +961,10 @@ allocateMightFail (Capability *cap, W_ n)
     p = bd->free;
     bd->free += n;
 
+    if ((uint64_t)bd == 0x4200100240) {
+      debugTrace(DEBUG_sched, "Found our bdescr");
+    }
+
     IF_DEBUG(sanity, ASSERT(*((StgWord8*)p) == 0xaa));
     return p;
 }

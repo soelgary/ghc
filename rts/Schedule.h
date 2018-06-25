@@ -185,7 +185,7 @@ nextHThread (Capability *cap)
 
   // An Hthread has not been scheduled yet
   if (cap->hrun_queue_current == END_TSO_QUEUE) {
-    ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
+    //ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
     return cap->hrun_queue_top;
   }
 
@@ -278,6 +278,7 @@ popRunQueue (Capability *cap)
 INLINE_HEADER StgTSO *
 peekRunQueueH (Capability *cap)
 {
+  debugTrace(DEBUG_sched, "Starting peek");
   if (countChildren(cap->hrun_queue_top) == 0) {
     return END_TSO_QUEUE;
   }
@@ -285,11 +286,21 @@ peekRunQueueH (Capability *cap)
     ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
     return cap->hlast_run;
   }
+  if (cap->hrun_queue_current == END_TSO_QUEUE) {
+    ASSERT(cap->hrun_queue_top != END_TSO_QUEUE);
+    return cap->hrun_queue_top;
+  }
+  if (cap->no == 1) {
+    debugTrace(DEBUG_sched, "Found our cap");
+  }
   StgTSO *current = cap->hrun_queue_current;
   StgTSO *next = nextHThread(cap);
   cap->hrun_queue_current = next;
+  uint64_t count = 0;
   while (next->isDone ||
     (next->why_blocked != NotBlocked && next->why_blocked != BlockedOnCCall)) {
+    debugTrace(DEBUG_sched, "Count=%d", count);
+    count++;
     next = nextHThread(cap);
     cap->hrun_queue_current = next;
   }
@@ -305,7 +316,7 @@ peekRunQueue (Capability *cap)
   //if (cap->run_queue_hd != END_TSO_QUEUE) {
   //return cap->run_queue_hd;
   //}
-  ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
+  //ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
   return peekRunQueueH(cap);
 }
 
@@ -339,7 +350,9 @@ INLINE_HEADER bool
 emptyRunQueueH(Capability *cap)
 {
   StgTSO *current = cap->hrun_queue_top;
-  return countChildren(current) == 0;
+  int count = countChildren(current);
+  debugTrace(DEBUG_sched, "Count is %d for cap %d", count, cap->no);
+  return count == 0;
   //return cap->n_hrun_queue == 0 || cap->hrun_queue_top == END_TSO_QUEUE;
 }
 
