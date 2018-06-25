@@ -78,6 +78,10 @@ scavengeTSO (StgTSO *tso)
 
     evacuate((StgClosure **)&tso->stackobj);
 
+    if (tso->id == 4) {
+      debugTrace(DEBUG_sched, "Scavenging our tso");
+    }
+
     evacuate((StgClosure **)&tso->parent);
     evacuate((StgClosure **)&tso->hlink);
     evacuate((StgClosure **)&tso->children);

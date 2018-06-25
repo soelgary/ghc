@@ -134,6 +134,7 @@ createThread(Capability *cap, W_ size)
     tso->children = END_TSO_QUEUE;
     tso->isHThread = false;
     tso->isDone = false;
+    tso->skip = false;
 
     /*
       Ticks of 0 means the thread will never busry wait. This must be changed
@@ -149,6 +150,10 @@ createThread(Capability *cap, W_ size)
 
     // ToDo: report the stack size in the event?
     traceEventCreateThread(cap, tso);
+
+    if (tso->id == 7) {
+      debugTrace(DEBUG_sched, "Found our thread");
+    }
 
     return tso;
 }

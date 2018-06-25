@@ -179,6 +179,7 @@ typedef struct StgTSO_ {
     StgTSO *parent;
     bool isHThread;
     bool isDone;
+    bool skip;
 
     // Time slices
     StgInt64 ticks; /* The number of ticks this TSO will run for when scheduled */

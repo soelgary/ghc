@@ -106,6 +106,13 @@ findSpark (Capability *cap)
       // If there are other threads, don't try to run any new
       // sparks: sparks might be speculative, we don't want to take
       // resources away from the main computation.
+      if (!emptyRunQueue(cap)) {
+        __attribute__((unused)) int count = countChildren(cap->hrun_queue_top);
+        debugTrace(DEBUG_sched, "Spark: run queue is not empty (%d)", count);
+      }
+      if (cap->n_returning_tasks != 0) {
+        debugTrace(DEBUG_sched, "Spark: returning tasks exist");
+      }
       return 0;
   }
 
@@ -896,6 +903,7 @@ yieldCapability (Capability** pCap, Task *task, bool gcAllowed)
     releaseCapability_(cap, false);
     if (isWorker(task) || isBoundTask(task)) {
         RELEASE_LOCK(&cap->lock);
+        debugTrace(DEBUG_sched, "Released lock for cap %d", cap->no);
         cap = waitForWorkerCapability(task);
     } else {
         // Not a worker Task, or a bound Task.  The only way we can be woken up
@@ -905,6 +913,7 @@ yieldCapability (Capability** pCap, Task *task, bool gcAllowed)
         // yet, so we can be sure to be woken up later. (see #10545)
         newReturningTask(cap,task);
         RELEASE_LOCK(&cap->lock);
+        debugTrace(DEBUG_sched, "Released lock for cap %d!", cap->no);
         cap = waitForReturnCapability(task);
     }
 
@@ -1191,9 +1200,10 @@ markCapability (evac_fn evac, void *user, Capability *cap,
     // thread's index plus a multiple of the number of GC threads.
     evac(user, (StgClosure **)(void *)&cap->run_queue_hd);
     evac(user, (StgClosure **)(void *)&cap->run_queue_tl);
-    evac(user, (StgClosure **)(void *)&cap->hrun_queue_current);
     evac(user, (StgClosure **)(void *)&cap->hrun_queue_top);
+    evac(user, (StgClosure **)(void *)&cap->hrun_queue_current);
     evac(user, (StgClosure **)(void *)&cap->cached_tso);
+    evac(user, (StgClosure **)(void *)&cap->hlast_run);
 #if defined(THREADED_RTS)
     evac(user, (StgClosure **)(void *)&cap->inbox);
 #endif
@@ -1269,6 +1279,7 @@ void
 capabilityHandleTick(Capability *cap)
 {
   ACQUIRE_LOCK(&cap->lock);
+  //debugTrace(DEBUG_sched, "Handled tick for cap %d", cap->no);
   cap->unprocessed_ticks++;
   RELEASE_LOCK(&cap->lock);
 }
@@ -1291,8 +1302,13 @@ handleTick()
 void
 processTick(Capability *cap, StgTSO *tso)
 {
+  //debugTrace(DEBUG_sched, "Acquiring lock for cap %d", cap->no);
   ACQUIRE_LOCK(&cap->lock);
-  recent_activity = ACTIVITY_YES;
+  //debugTrace(DEBUG_sched, "Acquired");
+  //recent_activity = ACTIVITY_YES;
+  if (cap->unprocessed_ticks > 0) {
+    debugTrace(DEBUG_sched, "Processing %d ticks", cap->unprocessed_ticks);
+  }
   tso->ticks_remaining -= cap->unprocessed_ticks;
   if (tso->suspended) {
     tso->suspendTicks -= cap->unprocessed_ticks;
