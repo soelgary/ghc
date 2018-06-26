@@ -137,7 +137,7 @@ static void scheduleStartSignalHandlers (Capability *cap);
 static void scheduleCheckBlockedThreads (Capability *cap);
 static void scheduleProcessInbox(Capability **cap);
 static void scheduleDetectDeadlock (Capability **pcap, Task *task);
-static void schedulePushWork(Capability *cap, Task *task);
+__attribute__((__unused__)) static void schedulePushWork(Capability *cap, Task *task);
 #if defined(THREADED_RTS)
 static void scheduleActivateSpark(Capability *cap);
 #endif
@@ -245,7 +245,6 @@ schedule (Capability *initialCapability, Task *task)
     //
     //   * We might be left with threads blocked in foreign calls,
     //     we should really attempt to kill these somehow (TODO).
-
     switch (sched_state) {
     case SCHED_RUNNING:
         break;
@@ -273,12 +272,17 @@ schedule (Capability *initialCapability, Task *task)
     default:
         barf("sched_state: %d", sched_state);
     }
-
+#if defined(THREADED_RTS)
+    if (cap->n_returning_tasks == 0) {
+      scheduleFindWork(&cap);
+    }
+#else
     scheduleFindWork(&cap);
+#endif
 
     /* work pushing, currently relevant only for THREADED_RTS:
        (pushes threads, wakes up idle capabilities for stealing) */
-    schedulePushWork(cap,task);
+    //schedulePushWork(cap,task);
 
     scheduleDetectDeadlock(&cap,task);
 
@@ -323,9 +327,16 @@ schedule (Capability *initialCapability, Task *task)
       if (t->why_blocked != NotBlocked) {
       } else if (t == END_TSO_QUEUE) {
         barf("Scheduling end tso queue");
+      } else if (t->what_next == ThreadComplete || t->what_next == ThreadKilled) {
+
       } else {
         break;
       }
+      #if defined(THREADED_RTS)
+      if (pending_sync) {
+        scheduleYield(&cap, task);
+      }
+      #endif
     }
 
 
@@ -721,7 +732,7 @@ scheduleYield (Capability **pcap, Task *task)
     Capability *cap = *pcap;
     bool didGcLast = false;
 
-    ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
+    //ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
 
     // if we have work, and we don't need to give up the Capability, continue.
     //
@@ -2572,8 +2583,10 @@ scheduleThreadOn(__attribute__((__unused__))Capability *cap, __attribute__((__un
     cpu %= enabled_capabilities;
     if (cpu == cap->no) {
         appendToRunQueue(cap,tso);
-    } else {
+    } else if (!tso->isHThread) {
         migrateThread(cap, tso, capabilities[cpu]);
+    } else {
+      appendToRunQueue(cap, tso);
     }
 #else
     appendToRunQueue(cap,tso);

@@ -178,6 +178,7 @@ typedef struct StgTSO_ {
     StgTSO *parent;
     bool isHThread;
     bool isDone;
+    bool skip;
 
 #if defined(TICKY_TICKY)
     /* TICKY-specific stuff would go here. */

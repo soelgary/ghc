@@ -321,6 +321,7 @@ initCapability (Capability *cap, uint32_t i)
     cap->hrun_queue_top = END_TSO_QUEUE;
     cap->hlast_run = END_TSO_QUEUE;
     cap->n_hrun_queue = 0;
+    cap->cached_tso = END_TSO_QUEUE;
 
     traceCapCreate(cap);
     traceCapsetAssignCap(CAPSET_OSPROCESS_DEFAULT, i);

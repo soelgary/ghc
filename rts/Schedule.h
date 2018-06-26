@@ -184,7 +184,7 @@ nextHThread (Capability *cap)
 
   // An Hthread has not been scheduled yet
   if (cap->hrun_queue_current == END_TSO_QUEUE) {
-    ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
+    //ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
     return cap->hrun_queue_top;
   }
 
@@ -232,17 +232,24 @@ popRunQueueH (Capability *cap)
     ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
     return;
   }
+  if (cap->cached_tso != END_TSO_QUEUE) {
+    cap->hrun_queue_current = cap->cached_tso;
+    cap->cached_tso = END_TSO_QUEUE;
+    ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
+    return;
+  }
   StgTSO *next = nextHThread(cap);
 
   cap->hrun_queue_current = next;
-  while (next->isDone || next->why_blocked != NotBlocked) {
-    next = nextHThread(cap);
-    cap->hrun_queue_current = next;
-  }
+  //while (next->isDone || next->why_blocked != NotBlocked ) {
+  //  next = nextHThread(cap);
+  //  cap->hrun_queue_current = next;
+  //}
   debugTrace(DEBUG_sched, "HSched: Queueing up TSO %d", next->id);
   ASSERT(next != END_TSO_QUEUE);
   ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
 }
+
 
 
 /* Pop the first thread off the runnable queue.
@@ -281,12 +288,14 @@ peekRunQueueH (Capability *cap)
   StgTSO *current = cap->hrun_queue_current;
   StgTSO *next = nextHThread(cap);
   cap->hrun_queue_current = next;
-  while (next->isDone) {
+  while (next->what_next != ThreadRunGHC || next->why_blocked != NotBlocked) {
+    //__attribute__((__unused__)) int count = countChildren(cap->hrun_queue_top);
+    //debugTrace(DEBUG_sched, "There are %d in the queue!!", count);
     next = nextHThread(cap);
     cap->hrun_queue_current = next;
   }
   cap->hrun_queue_current = current;
-  ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
+  //ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
   return next;
 }
 
@@ -297,7 +306,7 @@ peekRunQueue (Capability *cap)
   //if (cap->run_queue_hd != END_TSO_QUEUE) {
   //return cap->run_queue_hd;
   //}
-  ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
+  //ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
   return peekRunQueueH(cap);
 }
 
@@ -331,7 +340,9 @@ INLINE_HEADER bool
 emptyRunQueueH(Capability *cap)
 {
   StgTSO *current = cap->hrun_queue_top;
-  return countChildren(current) == 0;
+  int count = countChildren(current);
+  //debugTrace(DEBUG_sched, "There are %d in the queue", count);
+  return count == 0;
   //return cap->n_hrun_queue == 0 || cap->hrun_queue_top == END_TSO_QUEUE;
 }
 
