@@ -352,11 +352,7 @@ emptyRunQueueH(Capability *cap)
 {
   StgTSO *current = cap->hrun_queue_top;
   int count = countChildren(current);
-<<<<<<< HEAD
-  //debugTrace(DEBUG_sched, "There are %d in the queue", count);
-=======
   debugTrace(DEBUG_sched, "Count is %d for cap %d", count, cap->no);
->>>>>>> da87ef010a4fc8644f64c0e8415f5cdf2f77b55a
   return count == 0;
   //return cap->n_hrun_queue == 0 || cap->hrun_queue_top == END_TSO_QUEUE;
 }
