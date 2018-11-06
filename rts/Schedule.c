@@ -359,10 +359,6 @@ pop_thread:
         scheduleYield(&cap, task);
       }
       #endif
-
-      if (emptyRunQueue(cap)) {
-        goto cont_busy_wait;
-      }
     }
 
     // Sanity check the thread we're about to run.  This can be
@@ -811,6 +807,12 @@ scheduleYield (Capability **pcap, Task *task)
 {
     Capability *cap = *pcap;
     bool didGcLast = false;
+    debugTrace(DEBUG_sched, "current == END: %d", cap->hrun_queue_current == END_TSO_QUEUE);
+    debugTrace(DEBUG_sched, "top == END: %d", cap->hrun_queue_top == END_TSO_QUEUE);
+    debugTrace(DEBUG_sched, "current != END: %d", cap->hrun_queue_current != END_TSO_QUEUE);
+    //ASSERT((cap->hrun_queue_current == END_TSO_QUEUE &&
+    //        cap->hrun_queue_top == END_TSO_QUEUE) ||
+    //       cap->hrun_queue_current != END_TSO_QUEUE);
 
     //ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
 
