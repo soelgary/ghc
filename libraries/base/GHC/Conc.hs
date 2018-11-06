@@ -52,6 +52,7 @@ module GHC.Conc
         , mkWeakThreadId
 
         , getThreadTicks
+        , setThreadTicks
 
         , ThreadStatus(..), BlockReason(..)
         , threadStatus

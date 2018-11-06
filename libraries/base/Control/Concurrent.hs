@@ -46,6 +46,7 @@ module Control.Concurrent (
         throwTo,
 
         getThreadTicks,
+        setThreadTicks,
 
         -- ** Threads with affinity
         forkOn,

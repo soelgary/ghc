@@ -2456,6 +2456,7 @@ primop  SetThreadTicks "setThreadTicks#" GenPrimOp
    Int# -> State# RealWorld -> State# RealWorld
    with
    out_of_line = True
+   has_side_effects = True
 
 ------------------------------------------------------------------------
 section "Weak pointers"

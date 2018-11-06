@@ -42,9 +42,9 @@ createSparkThread (Capability *cap)
 {
     StgTSO *tso;
 
+    // TODO HS: Should be the current running thread
     StgTSO *parent = cap->hrun_queue_current;
-    debugTrace(DEBUG_sched, "parent == END: %d", parent == END_TSO_QUEUE);
-    debugTrace(DEBUG_sched, "cap: %d", cap->no);
+
     tso = createIOThread (cap, parent, RtsFlags.GcFlags.initialStkSize,
                           (StgClosure *)runSparks_closure);
     labelThread(cap, tso, "spark evaluator");

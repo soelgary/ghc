@@ -60,6 +60,7 @@ module GHC.Conc.Sync
         , labelThread
         , mkWeakThreadId
         , getThreadTicks
+        , setThreadTicks
 
 
         , ThreadStatus(..), BlockReason(..)
@@ -309,6 +310,11 @@ getThreadTicks :: () -> IO Int
 getThreadTicks () = IO $ \ s ->
   case (getThreadTicks# s) of
     (# s1, ticks# #) -> (# s1, I# ticks# #)
+
+setThreadTicks :: Int -> IO ()
+setThreadTicks (I# ticks) = IO $ \ s ->
+  case (setThreadTicks# ticks s) of
+    s1 -> (# s1, () #)
 
 tickDelay :: Int -> IO ()
 tickDelay (I# ticks) = IO $ \ s ->

@@ -137,7 +137,7 @@ static void scheduleStartSignalHandlers (Capability *cap);
 static void scheduleCheckBlockedThreads (Capability *cap);
 static void scheduleProcessInbox(Capability **cap);
 static void scheduleDetectDeadlock (Capability **pcap, Task *task);
-static void schedulePushWork(Capability *cap, Task *task) __attribute__((unused));
+__attribute__((__unused__)) static void schedulePushWork(Capability *cap, Task *task);
 #if defined(THREADED_RTS)
 static void scheduleActivateSpark(Capability *cap);
 #endif
@@ -276,8 +276,13 @@ cont_busy_wait:
     default:
         barf("sched_state: %d", sched_state);
     }
-
+#if defined(THREADED_RTS)
+    if (cap->n_returning_tasks == 0) {
+      scheduleFindWork(&cap);
+    }
+#else
     scheduleFindWork(&cap);
+#endif
 
     /* work pushing, currently relevant only for THREADED_RTS:
        (pushes threads, wakes up idle capabilities for stealing) */
@@ -348,6 +353,15 @@ pop_thread:
         ASSERT(!t->isDone);
         ASSERT(t != END_TSO_QUEUE);
         break;
+      }
+      #if defined(THREADED_RTS)
+      if (pending_sync) {
+        scheduleYield(&cap, task);
+      }
+      #endif
+
+      if (emptyRunQueue(cap)) {
+        goto cont_busy_wait;
       }
     }
 
@@ -797,12 +811,8 @@ scheduleYield (Capability **pcap, Task *task)
 {
     Capability *cap = *pcap;
     bool didGcLast = false;
-    debugTrace(DEBUG_sched, "current == END: %d", cap->hrun_queue_current == END_TSO_QUEUE);
-    debugTrace(DEBUG_sched, "top == END: %d", cap->hrun_queue_top == END_TSO_QUEUE);
-    debugTrace(DEBUG_sched, "current != END: %d", cap->hrun_queue_current != END_TSO_QUEUE);
-    //ASSERT((cap->hrun_queue_current == END_TSO_QUEUE &&
-    //        cap->hrun_queue_top == END_TSO_QUEUE) ||
-    //       cap->hrun_queue_current != END_TSO_QUEUE);
+
+    //ASSERT(cap->hrun_queue_current != END_TSO_QUEUE);
 
     // if we have work, and we don't need to give up the Capability, continue.
     //
